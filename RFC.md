@@ -222,17 +222,17 @@ The only unencrypted elements in the JSON document is the version of the metadat
                         "encrypted": {
                                 // Encryption key of the file
                                 "key": "jtboLmgGR1OQf2uneqCVHpklQLlIwWL5TXAQ0keK",
-                                // Initialization vector 
-                                "initializationVector": "+mHu52HyZq+pAAIN",
                                 // Unencrypted file name
                                 "filename": "/foo/test.txt",
                                 // Mimetype, if unknown use "application/octet-stream"
                                 "mimetype": "plain/text",
-                                // Authentication tag of the file
-                                "authenticationTag": "HMAC of file",
                                 // Which encryption method version was used? For updating in the future.
                                 "version": 1
                         },
+                        // Initialization vector 
+                        "initializationVector": "+mHu52HyZq+pAAIN",
+                        // Authentication tag of the file
+                        "authenticationTag": "GCM authentication tag",                        
                         // Which metadata key to use
                         "metadataKey": 1
                 }
