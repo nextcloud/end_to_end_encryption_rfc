@@ -47,7 +47,7 @@ The following security properties have to be fulfilled:
 * Access to ciphertext must not leak directory structure nor file names or content.
    * Leaking the number of files in an encrypted folders is an accepted risk.
 * Public keys of users must be auditable
-* Once a user has been removed from an encrypted folder they should have no relevant key material to encrypt files updated or created in the future
+* Once a user has been removed from an encrypted folder they should have no relevant key material to decrypt files updated or created in the future
 * Encrypted folders must use an encryption scheme fulfilling the following criteria:
    * Confidentiality
       * No one, except the legitimate recipients, must have access to the encrypted documents.
