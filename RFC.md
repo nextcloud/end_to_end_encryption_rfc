@@ -151,7 +151,7 @@ First, the client has to generate the relevant key material:
 In a second step, the private key will be stored encrypted on the server to simplify the addition of further devices:
 
 1. Client generates a 12 word long mnemonic from the english BIP-0039 word list. The word list contains 2048 words, thus resulting in 2048^12 possible key combinations.
-2. Client encrypts the private key using AES/GCM/NoPadding as cipher (128 bit key size) and uses PBKDF2WithHmacSHA1 as key derivation, as password the in step 1 generated mnemonic is used.
+2. Client encrypts the private key using AES/GCM/NoPadding as cipher (256 bit key size) and uses PBKDF2WithHmacSHA1 as key derivation, as password the in step 1 generated mnemonic is used.
 3. Client uploads the encrypted X.509 private key to the server by sending the encrypted private key URL encoded as parameter `privateKey` to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/private-key`. 
 4. The mnemonic is displayed to the user and the user is asked to store a copy in a secure place.
 5. The mnemonic is stored in the keychain of the device.
@@ -162,7 +162,7 @@ In case a user loses their device they can easily recover by using the mnemonic 
 In case a certificate exists already for the user the client has to download the existing private key. This is done the following way:
 
 1. Client downloads private key from the `/ocs/v2.php/apps/end_to_end_encryption/api/v1/private-key` endpoint.
-2. Client asks the user for the mnemonic and decrypts the private key using AES/GCM/NoPadding as cipher (128 bit key size) and PBKDF2WithHmacSHA1 as key derivation. 
+2. Client asks the user for the mnemonic and decrypts the private key using AES/GCM/NoPadding as cipher (256 bit key size) and PBKDF2WithHmacSHA1 as key derivation. 
 3. Client checks if private key belongs to previously downloaded public certificate
 4. Client stores the private key in the keychain of the device.
 
