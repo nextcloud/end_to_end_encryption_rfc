@@ -1,3 +1,4 @@
+
 # Nextcloud end-to-end encryption
 
 * [Introduction](#introduction)
@@ -29,6 +30,7 @@
       * [Remove someone from an existing share](#remove-someone-from-an-existing-share)
    * [Edgecases](#edgecases)
       * [Handling of complete key material loss](#handling-of-complete-key-material-loss)
+* [Implementation details](#implementation-details)
 
 ## Introduction
 With the announcement of the Nextcloud end-to-end encryption techpreview, we'd like to invite you to scrutinize our source code and cryptographic approach. 
@@ -322,3 +324,105 @@ However, considering the fact that the user has a mnemonic passphrase to recover
 
 We’re investigating how a CSR approach here could help in such edge-cases at least to allow new share again. We do however encourage users to make sure to not lose access to all their devices as well as their recovery mnemonic at the same time.
 
+## Implementation details
+
+### AES/GCM/NoPadding
+Android and openSSL (desktop/IOS) do not work in the exact same way. On Android the tag is added to the cipher text.
+This is not the case by using the C openSSL bindings. Keeping this in mind is important. Because operations will fail if
+this is not properly taken into account. And the resulting files will not be properly exchangeable.
+
+#### Encryption
+
+For demonstration purposes consider the following pseudocode to encrypt data:
+
+```
+encrypt(key, iv, plainTXT) {
+    context = initEncryption(AES_GCM);
+    context->setKey(key);
+    context->setIV(iv);
+    
+    cipherTXT = context->encrypt(plainTXT);
+    
+    tag = context->getTag();
+    cipherTXT->append(tag);
+    
+    return {cipherTXT, key, iv, tag};
+}
+```
+
+#### Decryption
+For demonstration purposes consider the following pseudocode to decrypt data:
+
+```
+decrypt(key, iv, tag, cipherTXT) {
+    context = initEncryption(AES_GCM);
+    context->setKey(key);
+    context->setIV(iv);
+
+    // Strip off the tag
+    realCypherTXT = cipherTXT[0:-16];
+    
+    plainTXT = context->decrypt(realCypher);
+    
+    if (!context->validateTag()) {
+        error();
+    }
+    
+    return plainTXT;
+}
+```
+
+### Private key
+
+The private key is a 2048 RSA key.
+
+We have some defined constants to use for encyrption and decryption of the private key:
+
+* salt: "$4$YmBjm3hk$Qb74D5IUYwghUmzsMqeNFx5z0/8$"
+* iterations: 1024
+* keyLength: 32 bytes (256 bit)
+* ivDelimiter: "fA=="
+
+#### Encryption
+
+For demonstration purposes consider the following pseudocode to encrypt the private key to be uploader
+to the Nextcloud Server
+
+```
+encryptPrivateKey(privateKey, mnemonic) {
+    key = PBKDF2WithHmacSHA1(mnemonic, salt, iterations, keyLength);
+    iv = generateIV(12);
+    
+    privateKeyB64 = Base64Encode(privateKey);
+    cipherTXT = encrypt(key, iv, privateKeyB64);
+    
+    cipherTXTB64 = Base64Encode(cipherTXT);
+    cipherTXTB64->append(ivDelimiter);
+    
+    ivB64 = Base64Encode(iv);
+    cipherTXTB64->append(ivB64);
+    
+    return cipherTXTB64;
+}
+```
+
+#### Decryption
+
+For demonstration purposes consider the following pseudocode to decrypt the private key when obtained
+from the Nextcloud server:
+
+```
+decryptPrivateKey(input, mnemonic) {
+    {cipherTXTB64, ivB64} = input.split(ivDelimiter);
+    key = PBKDF2WithHmacSHA1(mnemonic, salt, iterations, keyLength);
+    
+    cipherTXT = Base64Decode(cipherTXTB64);
+    iv = Base64Decode(ivB64);
+    tag = cipherTXT[-16:]; // Get the last 16 bytes for the tag
+
+    privateKeyB64 = decrypt(key, iv, tag, cipherTXT);
+    privateKey = Base64Decode(privateKeyB64);
+    
+    return privateKey;
+}
+```
