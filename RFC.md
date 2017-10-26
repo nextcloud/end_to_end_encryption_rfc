@@ -328,7 +328,7 @@ We’re investigating how a CSR approach here could help in such edge-cases at l
 
 ### AES/GCM/NoPadding
 Android and openSSL (desktop/IOS) do not work in the exact same way. On Android the tag is added to the cipher text.
-This is not the case by using the C openSSL bindings. Keeping this in mind is important. Because operations will fail if
+This is not the case by using the C openSSL bindings. Keeping this in mind is important, because operations will fail if
 this is not properly taken into account. And the resulting files will not be properly exchangeable.
 
 #### Encryption
