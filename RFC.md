@@ -376,7 +376,7 @@ decrypt(key, iv, tag, cipherTXT) {
 
 The private key is a 2048 RSA key.
 
-We have some defined constants to use for encyrption and decryption of the private key:
+We have some defined constants to use for encryption and decryption of the private key:
 
 * salt: "$4$YmBjm3hk$Qb74D5IUYwghUmzsMqeNFx5z0/8$"
 * iterations: 1024
@@ -385,8 +385,7 @@ We have some defined constants to use for encyrption and decryption of the priva
 
 #### Encryption
 
-For demonstration purposes consider the following pseudocode to encrypt the private key to be uploader
-to the Nextcloud Server
+For demonstration purposes consider the following pseudocode to encrypt the private key to be uploaded to the Nextcloud Server
 
 ```
 encryptPrivateKey(privateKey, mnemonic) {
