@@ -146,7 +146,7 @@ First, the client has to generate the relevant key material:
 2. Client uploads the X.509 certificate request to the server by sending the certificate request URL encoded as parameter `csr` to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/public-key`.
 3. Server issues a certificate if the CN matches the current user ID.
 4. Server returns the issued certificate.
-5. Client stores the private and the public key in the keychain of the device.
+5. Client stores the private and the certificate in the keychain of the device.
 
 In a second step, the private key will be stored encrypted on the server to simplify the addition of further devices:
 
