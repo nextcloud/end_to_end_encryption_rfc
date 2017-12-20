@@ -153,7 +153,7 @@ In a second step, the private key will be stored encrypted on the server to simp
 1. Client generates a 12 word long mnemonic from the english BIP-0039 word list. The word list contains 2048 words, thus resulting in 2048^12 possible key combinations.
 2. Client encrypts the private key using AES/GCM/NoPadding as cipher (256 bit key size) and uses PBKDF2WithHmacSHA1 as key derivation, as password the in step 1 generated mnemonic is used. The needed salt and initizialization vector is appended to the cipher text with base 64 encoded "|":  encryptedAndEncryptedBytes + "fA==" + encodedIV + "fA==" + encodedSalt
 3. Client uploads the encrypted X.509 private key to the server by sending the encrypted private key URL encoded as parameter `privateKey` to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/private-key`. 
-4. The mnemonic is displayed to the user and the user is asked to store a copy in a secure place.
+4. The mnemonic is displayed to the user and the user is asked to store a copy in a secure place. For convenient reasons the mnemonic can be displayed with whitespaces, but the string for encrypting/decrypting must have no whitespaces and be lowercase.
 5. The mnemonic is stored in the keychain of the device.
 
 In case a user loses their device they can easily recover by using the mnemonic passphrase. The mnemonic passphrase can also be shown in the client settings in case the user forgets their mnemonic. Displaying the mnemonic requires the user to enter their PIN/fingerprint again on mobile devices.
