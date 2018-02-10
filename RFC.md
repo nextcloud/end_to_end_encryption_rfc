@@ -262,7 +262,7 @@ The client can verify whether it is a new file or an existing one by downloading
 In case a new file is uploaded the client has to do the following steps:
 
 1. Generate a new 128-bit encryption key for the file and encrypt it using AES/GCM/NoPadding.
-2. Generate a random identifier for the file (e.g. an UUID) and upload the encrypted file via WebDAV using the random identifier as file ID
+2. Generate a UUID like identifier (UUID, ther remove "-", must follow /^[0-9a-fA-F]{32}$/) and upload the encrypted file via WebDAV using the random identifier as file ID
 3. Add new file to the files array in the metadata file
 4. Update and lock the encrypted folder as described in “Update metadata file”. The latest metadataKey should be used to encrypt the metadata.
 
