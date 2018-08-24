@@ -165,6 +165,7 @@ In case a certificate exists already for the user the client has to download the
 2. Client asks the user for the mnemonic and decrypts the private key using AES/GCM/NoPadding as cipher (256 bit key size) and PBKDF2WithHmacSHA1 as key derivation. 
 3. Client checks if private key belongs to previously downloaded public certificate
 4. Client stores the private key in the keychain of the device.
+5. Client stores the mnemonic in the keychain of the device.
 
 ### Creating an end-to-end encrypted folder
 To create an end-to-end encrypted folders multiple steps have to be performed. First of all, data access to such folders happens via our regular WebDAV API available at `/remote.php/dav/$userId/files`.
