@@ -244,43 +244,60 @@ This means that  “foo => [bar, foo]” should become “foo => “ciphertext�
 }
 ```
 
-The metadata has to be created by sending a POST request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/meta-data/<file-id>`, where `<file-id>` has to be the file ID indicated by our WebDAV API. The POST parameter `metaData` with the encrypted metadata has to be used.
+The metadata has to be created by sending a POST request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/meta-data/<folder-id>`, where `<folder-id>` has to be the folder ID indicated by our WebDAV API. The POST parameter `metaData` with the encrypted metadata has to be used.
+
+### Modifying and accessing content of an end-to-end encrypted folder
+In general, clients need to perform two steps to modify the content of an end-to-end encrypted folder.
+Firstly, clients upload, modify or delete the actual files via the WebDAV API and secondly modify the metadata JSON accordingly.
 
 #### Update metadata file
-To keep the metadata and the file in sync locking is required. The client needs to lock the encrypted folder. If the lock operation succeeded the file the server will return a successful response together with a token in the response body. In case of a lost connection the client can restart the operation later with another "lock" request, in this case the client should send the token with the new lock call. This enables the server to decide if the client is allowed to retry the upload.
+To keep the metadata and the file in sync locking is required.
+The client needs to lock the encrypted folder.
+If the lock operation succeeded the server responds with HTTP status code 200 together with a token in the response body.
+In case the client lost connection after locking the folder, it can restart the operation later with another "lock" request.
+In this case the client should send the token with the new lock call.
+This enables the server to decide if the client is allowed to retry the upload.
 
-After locking was successful, the client will upload the encrypted file and afterwards the metadata file. If both files are uploaded successful the client will finish the operation by sending a unlock request.
+After locking was successful, the client will upload the encrypted file and afterwards the metadata file.
+After both files are uploaded successfully the client will finish the operation by sending an unlock request.
 
-To lock the metadata a POST request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/lock/<file-id>` has to be sent. Whereas `<file-id>` has to be the file ID indicated by our WebDAV API. To add an existing lock token it can be sent as `token` parameter.
+The `<folder-id>` denotes the ID of the end-to-end encrypted folder given by the WebDAV API.
 
-To update the metadata a PUT request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/meta-data/<file-id>` has to be sent. Whereas `<file-id>` has to be the file ID indicated by our WebDAV API. As parameters “token”, which contains the current lock token, and “metadata”, containing the encrypted metadata have to be sent.
+To lock the folder a POST request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/lock/<folder-id>` has to be sent.
+To add an existing lock token it can be sent as `token` parameter.
 
-To unlock the metadata a DELETE request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/lock/<file-id>` has to be sent. Whereas `<file-id>` has to be the file ID indicated by our WebDAV API. The previously received lock token has to be sent as `token` parameter.
+To update the metadata a PUT request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/meta-data/<folder-id>` has to be sent.
+The request requires following two parameters:
+* The `token` contains the current lock token
+* The `metadata` contains the encrypted metadata JSON.
 
-### Uploading a file into an end-to-end encrypted folder
-To upload a file in an end-to-end encrypted folder the client has to differentiate whether it is a new file or an existing file that gets updated.
+To unlock the folder a DELETE request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/lock/<folder-id>` has to be sent.
+The previously received lock token has to be sent as `token` parameter.
 
-The client can verify whether it is a new file or an existing one by downloading the metadata and checking if the “files” array contain the referenced file.
+#### Modifying content of end-to-end encrypted folders
+The following steps are required to create, update, delete files of an end-to-end encrypted folder.
+1. Lock folder
+2. Check for changes in the encrypted folder. If not current, get latest metadata file.
+3. Perform specific steps to create/update/delete files
+    * Create new files:
+        1. Generate a new 128-bit encryption key for the file and encrypt it using AES/GCM/NoPadding.
+        2. Create new random identifier by generating a random UUID and removing the dash (`-`). The identifier must follow `/^[0-9a-fA-F]{32}$/`
+        3. Add new file to the files array in the metadata file
+    * Update existing files:
+        1. Generate a new 128-bit encryption key for the file and encrypt it using AES/GCM/NoPadding.
+        2. Update the file in the files array of the metadata
+        3. Use the existing random identifier for the encrypted file when uploading it via WebDAV
+    * Delete files:
+        1. Remove the corresponding entry from the files array
+4. Upload modified/new encrypted file, or delete the file via WebDAV
+5. Encrypt the metadata using the latest metadata key
+5. Upload encrypted metadata
+6. Unlock the folder
 
-#### Uploading new files
-In case a new file is uploaded the client has to do the following steps:
-
-1. Generate a new 128-bit encryption key for the file and encrypt it using AES/GCM/NoPadding.
-2. Create new random identifier by generating a random UUID and removing the dash (`-`). The identifier must follow `/^[0-9a-fA-F]{32}$/`
-3. Upload the encrypted file via WebDAV using the identifier as file ID
-4. Add new file to the files array in the metadata file
-5. Update and lock the encrypted folder as described in “Update metadata file”. The latest metadataKey should be used to encrypt the metadata.
-
-#### Updating existing files
-In case an existing file is updated the client has to do the following steps:
-1. Generate a new 128-bit encryption key for the file and encrypt it using AES/GCM/NoPadding.
-2. Lock the encrypted folder
-3. Use the existing random identifier for the file and upload the encrypted file via WebDAV using the existing random identifier as file ID
-4. Update the file in the files array of the metadata
-5. Update and unlock the metadata file. The latest metadataKey should be used to encrypt the metadata.
-
-#### Accessing encrypted files 
+#### Accessing encrypted files
+No locking is required to read files of an encrypted folder.
 To access encrypted files the client has to do the following steps:
+
 1. Download actual metadata of encrypted folder
 2. Loop over “files” array and decrypt the array with the newest metadata key
 3. Download the referenced files using WebDAV and decrypt using AES/GCM/NoPadding (128bit) and using the referenced file keys in the file array.
