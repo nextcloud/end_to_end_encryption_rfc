@@ -31,10 +31,10 @@
       * [Handling of complete key material loss](#handling-of-complete-key-material-loss)
 
 ## Introduction
-With the announcement of the Nextcloud end-to-end encryption techpreview, we'd like to invite you to scrutinize our source code and cryptographic approach. 
+With the announcement of the Nextcloud end-to-end encryption techpreview, we would like to invite you to scrutinize our source code and cryptographic approach.
 
 Please note that end-to-end encryption feature is a work-in-progress and this document may describe functionalities or approaches not yet implemented in our testing releases. This document is meant as authoritative implementation guideline for our clients. 
-For the sake of having smaller and incremental steps towards the final implementation we’re going to continuously release updated builds of our clients.
+For the sake of having smaller and incremental steps towards the final implementation we are going to continuously release updated builds of our clients.
 
 We are looking forward to your input to refine our approach towards client side encryption. In addition, we will also make sure to validate our approach on-time by external cryptographic experts.
 
@@ -71,7 +71,7 @@ Also due to our wide range of supported systems, the library must be available f
 * commonly used Linux distributions
 * PHP 7.0+
 
-_**Note:** While we don't have any current plans to add support for potential server-side decryption we want to keep this possibility open for the future._
+_**Note:** While we do not have any current plans to add support for potential server-side decryption we want to keep this possibility open for the future._
 
 ### Sharing functionality
 Existing client-side encryption solutions often prevent the sharing of encrypted files, the Nextcloud end-to-end encryption must offer support for the following sharing scenarios:
@@ -103,7 +103,7 @@ Thus:
 * Newly added devices should have access to all previously encrypted data
 
 ### Simple authenticated key exchange
-Key exchange is a key problem of any cryptographic system, on one hand one wants to ensure that the key of the participating parties is authentic. On the other hand, manual comparisons of fingerprints are cumbersome and rarely something that regular users can be bothered to do.
+Key exchange is a key problem of any cryptographic system. On one hand one wants to ensure that the key of the participating parties is authentic. On the other hand, manual comparisons of fingerprints are cumbersome and rarely something that regular users can be bothered to do.
 
 A secure and yet simple system has to implement the following properties:
 * Key exchange between parties should be frictionless
@@ -170,7 +170,7 @@ In case a certificate exists already for the user the client has to download the
 To create an end-to-end encrypted folders multiple steps have to be performed. First of all, data access to such folders happens via our regular WebDAV API available at `/remote.php/dav/$userId/files`.
 
 #### Mark folder as end-to-end encrypted
-After creating a folder via WebDAV the folder has to be flagged as end-to-end encrypted, this can be performed by sending a PUT request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/encrypted/<file-id>` whereas `<file-id>` has to be the file ID indicated by our WebDAV API.
+After creating a folder via WebDAV the folder has to be flagged as end-to-end encrypted, this can be performed by sending a PUT request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/encrypted/<folder-id>` where `<folder-id>` has to be the folder ID indicated by our WebDAV API.
 
 Once this flag has been set the folder will not be accessible anymore via web and also not displayed to regular DAV clients. Only empty folders can be marked as end-to-end encrypted.
 
@@ -185,7 +185,10 @@ The metadata is a JSON document with the following structure. The `metadata->met
 
 In case the central data recovery key is enabled the metadata will also be encrypted towards the servers central data recovery key. Clients must show a prominent warning to the users for such scenarios.
 
-The only unencrypted elements in the JSON document is the version of the metadata file. The other informations are all encrypted either based on the public key or the actual metadata keys. The encrypted JSON array elements should just be encrypted as simple string element. This means that  “foo => [bar, foo]” should become “foo => “ciphertext” and the clients are responsible for decoding this ciphertext in a proper array again.
+The only unencrypted elements in the JSON document is the version of the metadata file.
+All other information is encrypted either with users' public keys or the actual metadata keys.
+The encrypted JSON array elements should just be encrypted as simple string element.
+This means that  “foo => [bar, foo]” should become “foo => “ciphertext” and the clients are responsible for decoding this ciphertext in a proper array again.
 
 ```
 {
@@ -240,7 +243,7 @@ The only unencrypted elements in the JSON document is the version of the metadat
 }
 ```
 
-The metadata has to be created by sending a POST request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/meta-data/<file-id>`, whereas `<file-id>` has to be the file ID indicated by our WebDAV API. As POST parameter `metaData` with the encrypted metadata has to be used.
+The metadata has to be created by sending a POST request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/meta-data/<file-id>`, where `<file-id>` has to be the file ID indicated by our WebDAV API. The POST parameter `metaData` with the encrypted metadata has to be used.
 
 #### Update metadata file
 To keep the metadata and the file in sync locking is required. The client needs to lock the encrypted folder. If the lock operation succeeded the file the server will return a successful response together with a token in the response body. In case of a lost connection the client can restart the operation later with another "lock" request, in this case the client should send the token with the new lock call. This enables the server to decide if the client is allowed to retry the upload.
@@ -262,9 +265,10 @@ The client can verify whether it is a new file or an existing one by downloading
 In case a new file is uploaded the client has to do the following steps:
 
 1. Generate a new 128-bit encryption key for the file and encrypt it using AES/GCM/NoPadding.
-2. Generate a UUID like identifier (UUID, ther remove "-", must follow /^[0-9a-fA-F]{32}$/) and upload the encrypted file via WebDAV using the random identifier as file ID
-3. Add new file to the files array in the metadata file
-4. Update and lock the encrypted folder as described in “Update metadata file”. The latest metadataKey should be used to encrypt the metadata.
+2. Create new random identifier by generating a random UUID and removing the dash (`-`). The identifier must follow `/^[0-9a-fA-F]{32}$/`
+3. Upload the encrypted file via WebDAV using the identifier as file ID
+4. Add new file to the files array in the metadata file
+5. Update and lock the encrypted folder as described in “Update metadata file”. The latest metadataKey should be used to encrypt the metadata.
 
 #### Updating existing files
 In case an existing file is updated the client has to do the following steps:
@@ -294,10 +298,10 @@ The clients do the following when trying to establish a trust relationship to an
 2. Query the user certificates by sending  GET request to the `/ocs/v2.php/apps/end_to_end_encryption/api/v1/public-key`  endpoint and sending a JSON encoded `users` parameter containing the specified UIDs
 3. Verify if the certificate is issued by the downloaded server public key.
 4. 1. If yes: Use this one.
-   2. If no: Show a warning that initiating an encrypted share isn’t possible to the user.
+   2. If no: Show a warning that initiating an encrypted share is not possible to the user.
 5. Store the user certificate locally for next TOFU operations
 
-_*Note:* We're considering adding support for additional security measures such as Certificate Transparency Logs or HSM devices. Thus further reducing the risk of a hacked server._
+_*Note:* We are considering adding support for additional security measures such as Certificate Transparency Logs or HSM devices. Thus further reducing the risk of a hacked server._
 
 #### Add someone to an end-to-end encrypted folder
 To create a share the following actions have to be performed:
@@ -320,5 +324,5 @@ Right now a complete key material loss means that other users that already had a
 
 However, considering the fact that the user has a mnemonic passphrase to recover their key and any connected device (e.g. their smartphones) also has a way to recover the mnemonic we consider this an edge-case at the moment.
 
-We’re investigating how a CSR approach here could help in such edge-cases at least to allow new share again. We do however encourage users to make sure to not lose access to all their devices as well as their recovery mnemonic at the same time.
+We are investigating how a CSR approach here could help in such edge-cases at least to allow new share again. We do however encourage users to make sure to not lose access to all their devices as well as their recovery mnemonic at the same time.
 
