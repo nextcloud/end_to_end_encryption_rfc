@@ -286,7 +286,9 @@ The previously received lock token has to be sent as `token` parameter.
 The following steps are required to create, update, delete files of an end-to-end encrypted folder.
 1. Lock folder
 2. Check for changes in the encrypted folder. If not current, get latest metadata file.
-3. Perform specific steps to create/update/delete files
+3. Decrypt the metadata file
+4. Check that the sharing array is encrypted with the latest metadata key, otherwise abort and notify user
+5. Perform specific steps to create/update/delete files
     * Create new files:
         1. Generate a new 128-bit encryption key for the file and encrypt it using AES/GCM/NoPadding.
         2. Create new random identifier by generating a random UUID and removing the dash (`-`). The identifier must follow `/^[0-9a-fA-F]{32}$/`
@@ -297,18 +299,20 @@ The following steps are required to create, update, delete files of an end-to-en
         3. Use the existing random identifier for the encrypted file when uploading it via WebDAV
     * Delete files:
         1. Remove the corresponding entry from the files array
-4. Upload modified/new encrypted file, or delete the file via WebDAV
-5. Encrypt the metadata using the latest metadata key
-5. Upload encrypted metadata
-6. Unlock the folder
+6. Upload modified/new encrypted file, or delete the file via WebDAV
+7. Encrypt the metadata using the latest metadata key <!-- TODO how exactly? -->
+8. Upload encrypted metadata
+9. Unlock the folder
 
 #### Accessing encrypted files
 No locking is required to read files of an encrypted folder.
 To access encrypted files the client has to do the following steps:
 
-1. Download actual metadata of encrypted folder
-2. Loop over “files” array and decrypt the array with the newest metadata key
-3. Download the referenced files using WebDAV and decrypt using AES/GCM/NoPadding (128bit) and using the referenced file keys in the file array.
+1. Check for changes in the encrypted folder. If not current, get latest metadata file.
+2. Decrypt the metadata file
+3. Check that the sharing array is encrypted with the latest metadata key, otherwise abort and notify user
+4. Loop over “files” array and decrypt the array with the newest metadata key
+5. Download the referenced files using WebDAV and decrypt using AES/GCM/NoPadding (128bit) and using the referenced file keys in the file array.
 
 In case a file is referenced in the metadata but cannot be found on the WebDAV file system the user should be warned about this. If the file exists locally but not on the file system the client should reupload the file.
 
@@ -343,6 +347,9 @@ To remove someone from an existing share the following actions have to be perfor
 2. A new metadata-key must be generated
 3. The recipient is removed from the “sharing” array
 4. The metadata-key array must be re-encrypted to everyone except the recipient
+
+All clients must always check that the sharing array is encrypted with the latest metadata key.
+This is necessary to detect when a removed user tries to maliciously modify a shared end-to-end encrypted folder.
 
 ### Edgecases
 #### Handling of complete key material loss
