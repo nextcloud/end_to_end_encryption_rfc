@@ -38,23 +38,8 @@ For the sake of having smaller and incremental steps towards the final implement
 
 We are looking forward to your input to refine our approach towards client side encryption. In addition, we will also make sure to validate our approach on-time by external cryptographic experts.
 
-## Requirements
+## Protocol design goals
 The end-to-end encryption has to fulfill the following business and technical criteria.
-
-### Security properties
-The following security properties have to be fulfilled:
-
-* Access to ciphertext must not leak directory structure nor file names or content.
-   * Leaking the number of files in an encrypted folders is an accepted risk.
-* Public keys of users must be auditable
-* Once a user has been removed from an encrypted folder they should have no relevant key material to decrypt files updated or created in the future
-* Encrypted folders must use an encryption scheme fulfilling the following criteria:
-   * Confidentiality
-      * No one, except the legitimate recipients, must have access to the encrypted documents.
-   * Integrity
-      * Even with writable access to the ciphertext one should not be able to tamper with the data. In case an encrypted referenced file is deleted from the file system but still found in the metadata a warning should be displayed to the user.
-   * Authenticity
-      * Authenticity of the files has to be guaranteed.
 
 ### Usage of widely available and tested libraries for crypto primitives
 We believe that for security-sensitive functionalities relying on existing and proven libraries is an essential requirement. Thus we require that:
@@ -77,6 +62,7 @@ _**Note:** While we do not have any current plans to add support for potential s
 Existing client-side encryption solutions often prevent the sharing of encrypted files, the Nextcloud end-to-end encryption must offer support for the following sharing scenarios:
 
 * Sharing encrypted folders with other users
+* Any user that is part of the shared folder is able to add new users to the share
 
 The following sharing scenarios are considered out of-scope:
 
@@ -125,6 +111,28 @@ Since the data is not accessible to the server and to simplify the implementatio
 * Access to folders via web interface
 * Sharing to groups
 * Sharing at the level of individual files
+
+## Security goals
+### Attacker model
+The end-to-end encryption must protect against an attacker with following capabilities:
+
+* Attacker can circumvent underlying TLS/SSL transport encryption
+* Attacker has full control over the server (e.g. compromised server or malicious admin)
+* Attacker cannot tamper with key exchange between clients and with initial connection of a new client to a share (Trust on first use (TOFU))
+    * Future support for separate trusted key server could avoid the TOFU compromise and therefore protect against a stronger attacker.
+* Removed users: A user who is part of a shared end-to-end encrypted folder is trusted until the user has been removed
+
+### Goals
+The protocol must achieve following goals when assuming an attacker as specified above.
+
+* Access to ciphertext must not leak file content nor file names.
+   * Leaking the number of files in an encrypted folders is an accepted risk.
+   * Leaking the name of the encrypted folder and the name of sub-folders is an accepted risk.
+* Once a user has been removed from an encrypted folder they should have no relevant key material to decrypt files updated or created in the future
+* **Confidentiality**: No one, except the legitimate recipients, must have access to the encrypted documents.
+* **Integrity**: Even with writable access to the ciphertext one should not be able to tamper with the data.
+    In case an encrypted referenced file is deleted from the file system but still found in the metadata a warning should be displayed to the user.
+* **Authentication**: all changes (uploading new files, changing existing, removing existing files) to an end-to-end encrypted folder must only be made by a user who is part of the (shared) folder.
 
 ## Technical implementation
 The encryption is based upon an asymmetric cryptographic system. Every user has exactly one private and public key pair. The following steps will walk through the current technical implementation of the encryption.
