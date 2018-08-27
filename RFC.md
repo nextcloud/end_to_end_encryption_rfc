@@ -336,14 +336,14 @@ _*Note:* We are considering adding support for additional security measures such
 #### Add someone to an end-to-end encrypted folder
 To create a share the following actions have to be performed:
 
-1. The file has to be shared via the OCS sharing API to the recipient
+1. The file has to be shared via the [OCS](https://docs.nextcloud.com/server/13/developer_manual/core/ocs-share-api.html) sharing API to the recipient
 2. The metadata-keys must be encrypted to the recipient public key
 3. The recipient is added to the “sharing” array
 
 #### Remove someone from an existing share
 To remove someone from an existing share the following actions have to be performed:
 
-1. The file has to be unshared via the OCS sharing API to the recipient
+1. The file has to be unshared via the [OCS](https://docs.nextcloud.com/server/13/developer_manual/core/ocs-share-api.html) sharing API to the recipient
 2. A new metadata-key must be generated
 3. The recipient is removed from the “sharing” array
 4. The metadata-key array must be re-encrypted to everyone except the recipient
