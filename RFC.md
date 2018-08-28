@@ -137,9 +137,16 @@ The protocol must achieve following goals when assuming an attacker as specified
 ## Technical implementation
 The encryption is based upon an asymmetric cryptographic system. Every user has exactly one private and public key pair. The following steps will walk through the current technical implementation of the encryption.
 
-### Adding an end-to-end encrypted device
-As a first step a device has to be added to an account, a device can be anything able to run one of our supported clients. 
+### Terminology
+* Device: a device can be anything able to run one of our supported clients.
+* file-key: the actual key used to encrypt the file
+* files-array: associative array mapping random identifiers names to the (encrypted) metadata of the file
+* sharing array: associative array mapping usernames to their respective public keys. Used to list the users of a shared and encrypted folder
+* metadata-key: key used to encrypt the metadata of file, the file-key and the sharing array
+* metadata-key array: associative array mapping and index to a metadata-key
 
+### Adding an end-to-end encrypted device
+As a first step a device has to be added to an account.
 Depending on whether an end-to-end encrypted device already has been added to an account, the device will have to create new key material or use existing key material.
 
 To check whether a certificate has already been issued or not the `/ocs/v2.php/apps/end_to_end_encryption/api/v1/public-key` endpoint should be used. In addition, the client has to download the server’s public certificate from `/ocs/v2.php/apps/end_to_end_encryption/api/v1/server-key` and use this to verify the certificate chain in all future operations.
@@ -190,14 +197,17 @@ Every folder contains a metadata file containing the following information:
 * Access list to the folder
 * Key material for files in the folder
 
-The metadata is a JSON document with the following structure. The `metadata->metadataKeys` elements are encrypted to the recipients public keys and the values are used to encrypt the single file metadata elements.
+The metadata is a JSON document with the following structure depicted below.
+We use a notation with inline comments (`//`) for better readability.
+Note that comments are not available in standalone JSON and only used here for better understanding.
 
-In case the central data recovery key is enabled the metadata will also be encrypted towards the servers central data recovery key. Clients must show a prominent warning to the users for such scenarios.
+The `metadata->metadataKeys` elements are encrypted with the recipients public keys and the values are used to encrypt the single file metadata elements.
+
+In case the central data recovery key is enabled the metadata will also be encrypted with the servers central data recovery key.
+Clients must show a prominent warning to the users for such scenarios.
 
 The only unencrypted elements in the JSON document is the version of the metadata file.
-All other information is encrypted either with users' public keys or the actual metadata keys.
-The encrypted JSON array elements should just be encrypted as simple string element.
-This means that  “foo => [bar, foo]” should become “foo => “ciphertext” and the clients are responsible for decoding this ciphertext in a proper array again.
+All other information is encrypted either with users' public keys or the actual metadata-keys.
 
 ```
 {
