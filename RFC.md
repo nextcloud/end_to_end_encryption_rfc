@@ -348,7 +348,6 @@ The clients do the following when trying to establish a trust relationship to an
    2. If no: Show a warning that initiating an encrypted share is not possible to the user.
 5. Store the user certificate locally for next TOFU operations
 
-_*Note:* We are considering adding support for additional security measures such as Certificate Transparency Logs or HSM devices. Thus further reducing the risk of a hacked server._
 
 #### Add someone to an end-to-end encrypted folder
 To create a share the following actions have to be performed:
@@ -376,3 +375,18 @@ However, considering the fact that the user has a mnemonic passphrase to recover
 
 We are investigating how a CSR approach here could help in such edge-cases at least to allow new share again. We do however encourage users to make sure to not lose access to all their devices as well as their recovery mnemonic at the same time.
 
+## Possible extensions
+
+### Manual key verification
+The clients could expose QR-codes of their public keys to make manual verification of other users' public keys possible.
+
+### Hardware security module (HSM)
+A HSM would act as trusted third party and would eliminate the Nextcloud server from the key exchange process completely.
+I.e. it could replace trust on first use with a central trusted certificate authority (CA).
+The CA also would make key revocation possible with a certificate revocation list CRLs.
+To implement CRLs the clients would always check if a key was revoked before they encrypt something with a given key.
+
+### Metadata JSON arrays
+In case the metadata JSON format has to be adjusted in a later version and actual JSON arrays are used following should be taken into account:
+The encrypted JSON array elements should just be encrypted as simple string element.
+This means that `foo => [bar, foo]` should become `foo => ciphertext` and the clients are responsible for decoding this `ciphertext` in a proper array again.
