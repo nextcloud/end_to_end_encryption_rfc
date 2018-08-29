@@ -241,6 +241,10 @@ All other information is encrypted either with users' public keys or the actual 
                 "recipient1@example.com": "PUBLIC KEY",
                 "recipient2@example.com": "PUBLIC KEY"
             },
+
+            // base64 encoded signature (see next section)
+            "signature": "base64(signature)",
+            "signedBy": "recipient1@example.com"
         },
         // The protocol version
         "version": 1
@@ -278,6 +282,76 @@ All other information is encrypted either with users' public keys or the actual 
 
 The metadata has to be created by sending a POST request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/meta-data/<folder-id>`, where `<folder-id>` has to be the folder ID indicated by our WebDAV API. The POST parameter `metaData` with the encrypted metadata has to be used.
 
+### Signing the metadata
+
+For the security of the protocol it is important that the plaintext of the metadata-key is signed, not the ciphertext.
+All metadata-keys and their associated index as well as all recipients and all file identifiers and used metadata-keys must be signed.
+
+The `encrypted`, `initizializationVector`, `authenticationTag` elements of a `file` element do not need to be signed, because they are protected by the authentication tags of the AES+GCM authenticated encryption.
+It is therefore sufficient to sign which metadata-key is used to encrypt/decrypt the `encrypted` element.
+Signing only the associative array which maps file IDs to metadata-key indices avoids decryption of all `encrypted` elements on every single request.
+
+Problem: signed data must serialize to the same byte representation on all supported platforms, otherwise signature verification fails.
+We therefore write data to a byte stream in defined order with the following rules:
+* Associative arrays are sorted lexicographically by the key-value
+* Strings are written without null-byte
+
+Following schema defines the format of signed data.
+The `{...}*`-notation denotes the sorted associative arrays.
+A Java reference implementation is available in the [c14n](c14n) folder.
+
+```
+[
+    int32(protocolversion),
+    {int64(metadatakey_index),decrypted_metadata_key}*
+    {str_utf8(recipient_name),recipient_key}*,
+    {str_utf8(fileid),int64(metadatakey_index)}*
+]
+```
+
+The resulting byte array is passed to the `SHA256withRSA` signature scheme.
+The resulting signature bytes are base64 encoded and saved to the `signature` element before encrypting the metadata JSON.
+The signer's username is saved in the `signedBy` element.
+
+<!-- description of alternative c14n methods. The JSON based c14n would also allow de-serialization, which is not necessary (yet).
+
+Following data must be signed. The base64url function denotes base64 encoding using the URL and filename safe alphabet as defined in [RFC 4648](https://tools.ietf.org/html/rfc4648#page-7).
+
+```json
+{
+    "files": {
+        "fileid1": "int(metadataKeyIndex)",
+        "fileid2": "int(metadataKeyIndex)"
+    },
+    "metadatakeys": {
+        "0": "base64url(decrypted_metadatakey0)",
+        "1": "base64url(decrypted_metadatakey1)",
+        ...
+    },
+    "protocolversion": 0,
+    "recipients": {
+        "user0": "base64url(publickey0)",
+        "user1": "base64url(publickey1)"
+    }
+}
+```
+
+Problem: signed data must serialize to the same byte representation on all supported platforms, otherwise signature verification fails.
+We use a JSON canonicalization algorithm to solve this issue.
+The canonicalization is inspired by the [JCS](https://tools.ietf.org/html/draft-rundgren-json-canonicalization-scheme-01) draft and [Keybase's canonical packings](https://keybase.io/docs/api/1.0/canonical_packings#json).
+
+* Within a given map, keys cannot be repeated.
+* Keys are ordered lexicographically, sorted with case-sensitiviy.
+* Keynames must be quoted with double quotes.
+* No whitespace can be used in stringification output
+* All characters must be in the ASCII range `[0x20,0x7e]`.
+* All strings must use the minimal length encoding. For example, `A` and not `\u0041`.
+
+Two alternative canonicalization methods are still being discussed.
+1. Instead of JSON, we could use XML, where standardized canonicalization mechanisms already exist (See [canonical XML](https://www.w3.org/TR/xml-c14n/))
+2. Since we do not need de-serialization capabilities a simple mechanism could be developed from scratch.
+-->
+
 ### Modifying and accessing content of an end-to-end encrypted folder
 In general, clients need to perform two steps to modify the content of an end-to-end encrypted folder.
 Firstly, clients upload, modify or delete the actual files via the WebDAV API and secondly modify the metadata JSON accordingly.
@@ -312,6 +386,7 @@ The following steps are required to create, update, delete files of an end-to-en
 2. Check for changes in the encrypted folder. If not current, get latest metadata file.
 3. Decrypt the metadata file
 4. Check that the sharing array is encrypted with the latest metadata-key, otherwise abort and notify user
+6. Check the signature of the metadata as described [above](#signing-the-metadata)
 5. Perform specific steps to create/update/delete files
     * Create new files:
         1. Generate a new 128-bit encryption key for the file and encrypt it using AES/GCM/NoPadding.
@@ -324,6 +399,7 @@ The following steps are required to create, update, delete files of an end-to-en
     * Delete files:
         1. Remove the corresponding entry from the files array
 6. Upload modified/new encrypted file, or delete the file via WebDAV
+6. Sign the metadata as described [above](#signing-the-metadata)
 7. Encrypt the metadata using the latest metadata-key
 8. Upload encrypted metadata
 9. Unlock the folder
