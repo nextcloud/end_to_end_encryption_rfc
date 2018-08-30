@@ -385,9 +385,13 @@ The following steps are required to create, update, delete files of an end-to-en
 1. Lock folder
 2. Check for changes in the encrypted folder. If not current, get latest metadata file.
 3. Decrypt the metadata file
-4. Check that the sharing array is encrypted with the latest metadata-key, otherwise abort and notify user
+4. Check decrypted metadata-keys against previous version of the metadata-keys array.
+    * Check that new metadata-keys are always appended to the array.
+    * All metadata-keys of a previous version must be part of the new version at the same indices.
+    * If these checks fail, abort and notify user
+5. Check that the sharing array is encrypted with the latest metadata-key, otherwise abort and notify user
 6. Check the signature of the metadata as described [above](#signing-the-metadata)
-5. Perform specific steps to create/update/delete files
+7. Perform specific steps to create/update/delete files
     * Create new files:
         1. Generate a new 128-bit encryption key for the file and encrypt it using AES/GCM/NoPadding.
         2. Create new random identifier by generating a random UUID and removing the dash (`-`). The identifier must follow `/^[0-9a-fA-F]{32}$/`
@@ -398,11 +402,11 @@ The following steps are required to create, update, delete files of an end-to-en
         3. Use the existing random identifier for the encrypted file when uploading it via WebDAV
     * Delete files:
         1. Remove the corresponding entry from the files array
-6. Upload modified/new encrypted file, or delete the file via WebDAV
-6. Sign the metadata as described [above](#signing-the-metadata)
-7. Encrypt the metadata using the latest metadata-key
-8. Upload encrypted metadata
-9. Unlock the folder
+8. Upload modified/new encrypted file, or delete the file via WebDAV
+9. Sign the metadata as described [above](#signing-the-metadata)
+10. Encrypt the metadata using the latest metadata-key
+11. Upload encrypted metadata
+12. Unlock the folder
 
 #### Accessing encrypted files
 No locking is required to read files of an encrypted folder.
