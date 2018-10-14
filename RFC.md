@@ -154,7 +154,7 @@ In a second step, the private key will be stored encrypted on the server to simp
 2. Client encrypts the private key using AES/GCM/NoPadding as cipher (256 bit key size) and uses PBKDF2WithHmacSHA1 as key derivation, as password the in step 1 generated mnemonic is used. The needed salt and initizialization vector is appended to the cipher text with base 64 encoded "|":  encryptedAndEncryptedBytes + "fA==" + encodedIV + "fA==" + encodedSalt
 3. Client uploads the encrypted X.509 private key to the server by sending the encrypted private key URL encoded as parameter `privateKey` to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/private-key`. 
 4. The mnemonic is displayed to the user and the user is asked to store a copy in a secure place. For convenient reasons the mnemonic can be displayed with whitespaces, but the string for encrypting/decrypting must have no whitespaces and be lowercase.
-5. The mnemonic is stored in the keychain of the device.
+5. The mnemonic is stored in the keychain of the device (ideally with spaces so it can be shown more readable).
 
 In case a user loses their device they can easily recover by using the mnemonic passphrase. The mnemonic passphrase can also be shown in the client settings in case the user forgets their mnemonic. Displaying the mnemonic requires the user to enter their PIN/fingerprint again on mobile devices.
 
@@ -163,8 +163,9 @@ In case a certificate exists already for the user the client has to download the
 
 1. Client downloads private key from the `/ocs/v2.php/apps/end_to_end_encryption/api/v1/private-key` endpoint.
 2. Client asks the user for the mnemonic and decrypts the private key using AES/GCM/NoPadding as cipher (256 bit key size) and PBKDF2WithHmacSHA1 as key derivation. 
-3. Client checks if private key belongs to previously downloaded public certificate
+3. Client checks if private key belongs to previously downloaded public certificate.
 4. Client stores the private key in the keychain of the device.
+5. The mnemonic is stored in the keychain of the device (ideally with spaces so it can be shown more readable).
 
 ### Creating an end-to-end encrypted folder
 To create an end-to-end encrypted folders multiple steps have to be performed. First of all, data access to such folders happens via our regular WebDAV API available at `/remote.php/dav/$userId/files`.
