@@ -1,3 +1,4 @@
+
 # Nextcloud end-to-end encryption
 
 * [Introduction](#introduction)
@@ -29,6 +30,7 @@
       * [Remove someone from an existing share](#remove-someone-from-an-existing-share)
    * [Edgecases](#edgecases)
       * [Handling of complete key material loss](#handling-of-complete-key-material-loss)
+* [Implementation details](#implementation-details)
 
 ## Introduction
 With the announcement of the Nextcloud end-to-end encryption techpreview, we'd like to invite you to scrutinize our source code and cryptographic approach. 
@@ -146,14 +148,14 @@ First, the client has to generate the relevant key material:
 2. Client uploads the X.509 certificate request to the server by sending the certificate request URL encoded as parameter `csr` to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/public-key`.
 3. Server issues a certificate if the CN matches the current user ID.
 4. Server returns the issued certificate.
-5. Client stores the private and the public key in the keychain of the device.
+5. Client stores the private and the certificate in the keychain of the device.
 
 In a second step, the private key will be stored encrypted on the server to simplify the addition of further devices:
 
 1. Client generates a 12 word long mnemonic from the english BIP-0039 word list. The word list contains 2048 words, thus resulting in 2048^12 possible key combinations.
-2. Client encrypts the private key using AES/GCM/NoPadding as cipher (256 bit key size) and uses PBKDF2WithHmacSHA1 as key derivation, as password the in step 1 generated mnemonic is used.
+2. Client encrypts the private key using AES/GCM/NoPadding as cipher (256 bit key size) and uses PBKDF2WithHmacSHA1 as key derivation, as password the in step 1 generated mnemonic is used. The needed salt and initizialization vector is appended to the cipher text with base 64 encoded "|":  encryptedAndEncryptedBytes + "fA==" + encodedIV + "fA==" + encodedSalt
 3. Client uploads the encrypted X.509 private key to the server by sending the encrypted private key URL encoded as parameter `privateKey` to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/private-key`. 
-4. The mnemonic is displayed to the user and the user is asked to store a copy in a secure place.
+4. The mnemonic is displayed to the user and the user is asked to store a copy in a secure place. For convenient reasons the mnemonic can be displayed with whitespaces, but the string for encrypting/decrypting must have no whitespaces and be lowercase.
 5. The mnemonic is stored in the keychain of the device.
 
 In case a user loses their device they can easily recover by using the mnemonic passphrase. The mnemonic passphrase can also be shown in the client settings in case the user forgets their mnemonic. Displaying the mnemonic requires the user to enter their PIN/fingerprint again on mobile devices.
@@ -266,7 +268,7 @@ In case a new file is uploaded the client has to do the following steps:
     2. Generate a new 128-bit IV for the file
     3. Encrypt the file using the key and IV with AES/GCM/NoPadding
     4. Save the authenticationTag
-2. Generate a random identifier for the file (e.g. an UUID) and upload the encrypted file via WebDAV using the random identifier as file ID
+2. Generate a UUID like identifier (UUID, ther remove "-", must follow /^[0-9a-fA-F]{32}$/) and upload the encrypted file via WebDAV using the random identifier as file ID
 3. Add new file to the files array in the metadata file
     1. Add file info
     2. Add key
@@ -343,3 +345,104 @@ However, considering the fact that the user has a mnemonic passphrase to recover
 
 We’re investigating how a CSR approach here could help in such edge-cases at least to allow new share again. We do however encourage users to make sure to not lose access to all their devices as well as their recovery mnemonic at the same time.
 
+## Implementation details
+
+### AES/GCM/NoPadding
+Android and openSSL (desktop/IOS) do not work in the exact same way. On Android the tag is added to the cipher text.
+This is not the case by using the C openSSL bindings. Keeping this in mind is important, because operations will fail if
+this is not properly taken into account. And the resulting files will not be properly exchangeable.
+
+#### Encryption
+
+For demonstration purposes consider the following pseudocode to encrypt data:
+
+```
+encrypt(key, iv, plainTXT) {
+    context = initEncryption(AES_GCM);
+    context->setKey(key);
+    context->setIV(iv);
+    
+    cipherTXT = context->encrypt(plainTXT);
+    
+    tag = context->getTag();
+    cipherTXT->append(tag);
+    
+    return {cipherTXT, key, iv, tag};
+}
+```
+
+#### Decryption
+For demonstration purposes consider the following pseudocode to decrypt data:
+
+```
+decrypt(key, iv, tag, cipherTXT) {
+    context = initEncryption(AES_GCM);
+    context->setKey(key);
+    context->setIV(iv);
+
+    // Strip off the tag
+    realCypherTXT = cipherTXT[0:-16];
+    
+    plainTXT = context->decrypt(realCypher);
+    
+    if (!context->validateTag()) {
+        error();
+    }
+    
+    return plainTXT;
+}
+```
+
+### Private key
+
+The private key is a 2048 RSA key.
+
+We have some defined constants to use for encryption and decryption of the private key:
+
+* salt: "$4$YmBjm3hk$Qb74D5IUYwghUmzsMqeNFx5z0/8$"
+* iterations: 1024
+* keyLength: 32 bytes (256 bit)
+* ivDelimiter: "fA=="
+
+#### Encryption
+
+For demonstration purposes consider the following pseudocode to encrypt the private key to be uploaded to the Nextcloud Server
+
+```
+encryptPrivateKey(privateKey, mnemonic) {
+    key = PBKDF2WithHmacSHA1(mnemonic, salt, iterations, keyLength);
+    iv = generateIV(12);
+    
+    privateKeyB64 = Base64Encode(privateKey);
+    cipherTXT = encrypt(key, iv, privateKeyB64);
+    
+    cipherTXTB64 = Base64Encode(cipherTXT);
+    cipherTXTB64->append(ivDelimiter);
+    
+    ivB64 = Base64Encode(iv);
+    cipherTXTB64->append(ivB64);
+    
+    return cipherTXTB64;
+}
+```
+
+#### Decryption
+
+For demonstration purposes consider the following pseudocode to decrypt the private key when obtained
+from the Nextcloud server:
+
+```
+decryptPrivateKey(input, mnemonic) {
+    {cipherTXTB64, ivB64} = input.split(ivDelimiter);
+    key = PBKDF2WithHmacSHA1(mnemonic, salt, iterations, keyLength);
+    
+    cipherTXT = Base64Decode(cipherTXTB64);
+    iv = Base64Decode(ivB64);
+    tag = cipherTXT[-16:]; // Get the last 16 bytes for the tag
+
+    privateKeyB64 = decrypt(key, iv, tag, cipherTXT);
+    privateKey = Base64Decode(privateKeyB64);
+    
+    return privateKey;
+}
+```
