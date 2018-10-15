@@ -263,24 +263,45 @@ The client can verify whether it is a new file or an existing one by downloading
 #### Uploading new files
 In case a new file is uploaded the client has to do the following steps:
 
-1. Generate a new 128-bit encryption key for the file and encrypt it using AES/GCM/NoPadding.
+1. Encrypt the file
+    1. Generate a new 128-bit encryption key for the file
+    2. Generate a new 128-bit IV for the file
+    3. Encrypt the file using the key and IV with AES/GCM/NoPadding
+    4. Save the authenticationTag
 2. Generate a UUID like identifier (UUID, ther remove "-", must follow /^[0-9a-fA-F]{32}$/) and upload the encrypted file via WebDAV using the random identifier as file ID
 3. Add new file to the files array in the metadata file
+    1. Add file info
+    2. Add key
+    3. Add IV
+    4. Add authenticationTag
 4. Update and lock the encrypted folder as described in “Update metadata file”. The latest metadataKey should be used to encrypt the metadata.
 
 #### Updating existing files
 In case an existing file is updated the client has to do the following steps:
-1. Generate a new 128-bit encryption key for the file and encrypt it using AES/GCM/NoPadding.
+1. Encrypt the file
+    1. Generate a new 128-bit encryption key for the file
+    2. Generate a new 128-bit IV for the file
+    3. Encrypt the file using the key and IV with AES/GCM/NoPadding
+    4. Save the authenticationTag
 2. Lock the encrypted folder
 3. Use the existing random identifier for the file and upload the encrypted file via WebDAV using the existing random identifier as file ID
 4. Update the file in the files array of the metadata
+    1. Update key
+    2. Update IV
+    3. Update authenticationTag
 5. Update and unlock the metadata file. The latest metadataKey should be used to encrypt the metadata.
 
 #### Accessing encrypted files 
 To access encrypted files the client has to do the following steps:
 1. Download actual metadata of encrypted folder
 2. Loop over “files” array and decrypt the array with the newest metadata key
-3. Download the referenced files using WebDAV and decrypt using AES/GCM/NoPadding (128bit) and using the referenced file keys in the file array.
+3. Download the referenced files using WebDAV
+4. Decrypt the file
+    1. Get the key from the metadatafile
+    2. Get the IV from the metadata file
+    3. Get the authenticationTag from the metadata file
+    4. Decrypt using AES/GCM/NoPadding (128bit) using the key and IV
+    5. Validate decryption using authenticationTag
 
 In case a file is referenced in the metadata but cannot be found on the WebDAV file system the user should be warned about this. If the file exists locally but not on the file system the client should reupload the file.
 
