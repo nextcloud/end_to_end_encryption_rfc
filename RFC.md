@@ -246,9 +246,9 @@ The only unencrypted elements in the JSON document is the version of the metadat
 The metadata has to be created by sending a POST request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/meta-data/<file-id>`, whereas `<file-id>` has to be the file ID indicated by our WebDAV API. As POST parameter `metaData` with the encrypted metadata has to be used.
 
 #### Update metadata file
-To keep the metadata and the file in sync locking is required. The client needs to lock the encrypted folder. If the lock operation succeeded the file the server will return a successful response together with a token in the response body. In case of a lost connection the client can restart the operation later with another "lock" request, in this case the client should send the token with the new lock call. This enables the server to decide if the client is allowed to retry the upload.
+To keep the metadata and the file in sync locking is required. The client needs to lock the encrypted folder. If the lock operation succeeded the server will return a successful response together with a token in the response body. In case of a lost connection the client can restart the operation later with another "lock" request, in this case the client should send the token with the new lock call. This enables the server to decide if the client is allowed to retry the upload.
 
-After locking was successful, the client will upload the encrypted file and afterwards the metadata file. If both files are uploaded successful the client will finish the operation by sending a unlock request.
+After locking was successful, the client will upload the encrypted file and afterwards the metadata file. If both files are uploaded successfully, the client will finish the operation by sending an unlock request.
 
 To lock the metadata a POST request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/lock/<file-id>` has to be sent. Whereas `<file-id>` has to be the file ID indicated by our WebDAV API. To add an existing lock token it can be sent as `token` parameter.
 
