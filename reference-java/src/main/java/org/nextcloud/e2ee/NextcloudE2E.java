@@ -17,7 +17,6 @@ import java.security.PrivateKey;
 import java.security.Provider;
 import java.security.PublicKey;
 import java.security.SecureRandom;
-import java.security.cert.CertificateEncodingException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -68,7 +67,16 @@ public class NextcloudE2E
     public static final String       RSA_OAEP         = "RSA/ECB/OAEPWithSHA-256AndMGF1Padding";
     public static final String       PBKDF            = "PBKDF2WithHmacSHA1";
     
-    public static Recipient findRecipient( byte[] certificate, List<Recipient> recipients ) throws CertificateEncodingException
+    /**
+     * Select the recipient matching the provided certificate.
+     * 
+     * @param certificate
+     *            the certificate to search for
+     * @param recipients
+     *            the list of recipients
+     * @return the recipient for which the certificate matches the input certificate or <code>null</code> if none matches.
+     */
+    public static Recipient findRecipient( byte[] certificate, List<Recipient> recipients )
     {
         for ( Recipient recipient : recipients )
         {
@@ -81,6 +89,17 @@ public class NextcloudE2E
         return null;
     }
     
+    /**
+     * Decrypt a private key, based on the operations described in {@link #encryptPrivateKey(PrivateKey, String)}.
+     * 
+     * @param data
+     *            the public information needed to decrypt the key
+     * @param mnemonic
+     *            the secret passphrase
+     * @return the private key, ready to perform decryption/signature operations
+     * @throws GeneralSecurityException
+     *             if a cryptographic operation fails.
+     */
     public static PrivateKey decryptPrivateKey( PrivateKeyData data, String mnemonic ) throws GeneralSecurityException
     {
         SecretKey keyEncryptionKey = deriveKeyEncryptionKey( mnemonic, data.salt );
@@ -166,6 +185,19 @@ public class NextcloudE2E
         return new SecretKeySpec( kek.getEncoded(), "AES" );
     }
     
+    /**
+     * Decrypt the encrypted metadata key.
+     * 
+     * Use RSA OAEP with SHA-256 (MGF1 with SHA-256) to decrypt the key.
+     * 
+     * @param key
+     *            the private key to decrypt the symmetric key.
+     * @param ciphertext
+     *            the encrypted symmetric metadata key.
+     * @return the unwrapped metadata key, ready to use.
+     * @throws GeneralSecurityException
+     *             if decryption fails
+     */
     public static SecretKey unwrapMetadataKey( PrivateKey key, byte[] ciphertext ) throws GeneralSecurityException
     {
         Cipher rsa = Cipher.getInstance( RSA_OAEP );
@@ -174,6 +206,19 @@ public class NextcloudE2E
         return (SecretKey) rsa.unwrap( ciphertext, "AES", Cipher.SECRET_KEY );
     }
     
+    /**
+     * Encrypt the metadata key.
+     * 
+     * Use RSA OAEP with SHA-256 (MGF1 with SHA-256) to encrypt the key.
+     * 
+     * @param key
+     *            the private key to use for encryption.
+     * @param metadataKey
+     *            the key to be encrypted/wrapped.
+     * @return the encrypted key binary.
+     * @throws GeneralSecurityException
+     *             if encryption fails
+     */
     public static byte[] wrapMetadataKey( PublicKey key, SecretKey metadataKey ) throws GeneralSecurityException
     {
         Cipher rsa = Cipher.getInstance( RSA_OAEP );
@@ -182,6 +227,19 @@ public class NextcloudE2E
         return rsa.wrap( metadataKey );
     }
     
+    /**
+     * Decrypt the metadata by performing the reverse steps laid out in {@link #encryptMetadata(SecretKey, DecryptedMetadata)}.
+     * 
+     * @param metadataKey
+     *            the key to decrypt the metadata
+     * @param encryptedMetadata
+     *            the encrypted metadata
+     * @return the decrypted and uncompressed parsed meta information
+     * @throws GeneralSecurityException
+     *             if decryption fails
+     * @throws IOException
+     *             if gzip or json parsing fails
+     */
     public static DecryptedMetadata decryptMetadata( SecretKey metadataKey, EncryptedMetadata encryptedMetadata )
             throws GeneralSecurityException, IOException
     {
@@ -198,6 +256,25 @@ public class NextcloudE2E
         }
     }
     
+    /**
+     * Encrypt the metadata using the metadata key.
+     * 
+     * <ol>
+     * <li>Serialize the input metadata structure to json</li>
+     * <li>gzip the json</li>
+     * <li>encrypt the gzipped data using AES-GCM</li>
+     * </ol>
+     * 
+     * @param metadataKey
+     *            the key to encrypt the metadata with
+     * @param plainMetadata
+     *            the unencrypted metadata structure.
+     * @return a structure containing the encrypted structure, the nonce and authentication tag.
+     * @throws GeneralSecurityException
+     *             if encryption fails
+     * @throws IOException
+     *             if json serialization or gzip fail
+     */
     public static EncryptedMetadata encryptMetadata( SecretKey metadataKey, DecryptedMetadata plainMetadata )
             throws GeneralSecurityException, IOException
     {
@@ -227,6 +304,20 @@ public class NextcloudE2E
         return result;
     }
     
+    /**
+     * Decrypt a file using key, nonce and authenticationTag provided with the {@link FileMetadata}.
+     * 
+     * @param info
+     *            the metadata containing key material, nonce and authenticationTag.
+     * @param encryptedFile
+     *            the file containing the encrypted data (access: read)
+     * @param target
+     *            the file the plaintext is stored in (access: write, create)
+     * @throws GeneralSecurityException
+     *             if decryption fails
+     * @throws IOException
+     *             if reading or writing a file fails
+     */
     public static void decryptFile( FileMetadata info, File encryptedFile, File target ) throws GeneralSecurityException, IOException
     {
         Cipher cipher = Cipher.getInstance( AES_GCM, BC );
@@ -242,6 +333,21 @@ public class NextcloudE2E
         }
     }
     
+    /**
+     * Encrypt a file, store the resulting ciphertext in the target file and return the metadata associated with the file.
+     * 
+     * @param plainFile
+     *            the file reference to the plaintext file (access: read)
+     * @param target
+     *            the file the ciphertext is stored in (access: read, write, create)
+     * @param mimetype
+     *            the mimetype of the file
+     * @return the file metadata with the original filename, nonce, key and authentication tag.
+     * @throws GeneralSecurityException
+     *             if encryption fails
+     * @throws IOException
+     *             if reading from the input or writing to the output fails.
+     */
     public static FileMetadata encryptFile( File plainFile, File target, String mimetype )
             throws GeneralSecurityException, IOException
     {
