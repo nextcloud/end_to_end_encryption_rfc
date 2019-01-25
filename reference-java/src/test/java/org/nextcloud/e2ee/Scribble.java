@@ -39,9 +39,8 @@ public class Scribble
         String fileid = UUID.randomUUID().toString().replace( "-", "" );
         
         // encryption
-        SecretKey filekey = NextcloudE2E.generateAesKey();
         File encFile = tmpFile( ".enc" );
-        FileMetadata fileMetadata = encryptFile( filekey, plainFile, encFile, "text/plain" );
+        FileMetadata fileMetadata = encryptFile( plainFile, encFile, "text/plain" );
         
         DecryptedMetadata decryptedMetadata = new DecryptedMetadata();
         decryptedMetadata.files.put( fileid, fileMetadata );

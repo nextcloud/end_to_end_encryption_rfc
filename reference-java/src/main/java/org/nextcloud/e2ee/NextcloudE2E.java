@@ -196,9 +196,10 @@ public class NextcloudE2E
         }
     }
     
-    public static FileMetadata encryptFile( SecretKey fileKey, File plainFile, File target, String mimetype )
+    public static FileMetadata encryptFile( File plainFile, File target, String mimetype )
             throws GeneralSecurityException, IOException
     {
+        SecretKey fileKey = generateAesKey();
         byte[] nonce = generateGcmNonce();
         byte[] authTag = new byte[GCM_TAG_LENGTH / 8];
         
