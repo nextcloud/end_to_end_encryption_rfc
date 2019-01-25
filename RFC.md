@@ -400,7 +400,7 @@ The private key is a 2048 RSA key.
 
 We have some defined constants to use for encryption and decryption of the private key:
 
-* salt: "$4$YmBjm3hk$Qb74D5IUYwghUmzsMqeNFx5z0/8$"
+* saltLength: 40 bytes
 * iterations: 1024
 * keyLength: 32 bytes (256 bit)
 * ivDelimiter: "fA=="
