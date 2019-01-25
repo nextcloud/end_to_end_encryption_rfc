@@ -41,13 +41,13 @@ public class Certificates
         SubjectPublicKeyInfo publicKeyInfo = SubjectPublicKeyInfo
                 .getInstance( ASN1Sequence.getInstance( publicKey.getEncoded() ) );
         
-        X500Name subject = new X500Name( "cn=procilon-test" );
+        X500Name subject = new X500Name( "cn=test" );
         
         X509v3CertificateBuilder certificateBuilder = new X509v3CertificateBuilder( subject, BigInteger.ONE, now,
                 new Date( now.getTime() + duration ), subject, publicKeyInfo );
         
         X509CertificateHolder certificateHolder = certificateBuilder
-                .addExtension( Extension.authorityKeyIdentifier, false, new AuthorityKeyIdentifier( new byte[20] ) )
+                .addExtension( Extension.authorityKeyIdentifier, false, new AuthorityKeyIdentifier( certId ) )
                 .addExtension( Extension.subjectKeyIdentifier, false, new SubjectKeyIdentifier( certId ) )
                 .build( new JcaContentSignerBuilder( "SHA256WithRSAandMGF1" ).setProvider( BC ).build( signingKey ) );
         
