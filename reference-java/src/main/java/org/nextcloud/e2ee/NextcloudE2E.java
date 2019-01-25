@@ -41,6 +41,22 @@ import org.bouncycastle.util.io.Streams;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+/**
+ * List of functions related to nextcloud e2ee feature (end to end encryption).
+ * 
+ * <p/>
+ * This is how it works: On registration, a user generates a pair of RSA-2048 keys and lets the backend sign a X.509 Certificate containing
+ * the public key.
+ * <p/>
+ * A user also has a secret passphrase called mnemonic that is stored in a local keychain or something alike. For storing the private key on
+ * the server for device distribution it is encrypted based on the mnemonic.
+ * </p>
+ * encrypt/decrypt the private key: {@link #encryptPrivateKey(PrivateKey, String)}, {@link #decryptPrivateKey(PrivateKeyData, String)}
+ * 
+ * @see <a href="https://github.com/nextcloud/end_to_end_encryption_rfc">nextcloud/end_to_end_encryption_rfc</a>
+ * @author Max Fichtelmann <max.fichtelmann@gmail.com>
+ *
+ */
 public class NextcloudE2E
 {
     public static final Provider     BC               = new BouncyCastleProvider();
@@ -79,6 +95,36 @@ public class NextcloudE2E
         return (PrivateKey) cipher.unwrap( encryptedKey.array(), "RSA", Cipher.PRIVATE_KEY );
     }
     
+    /**
+     * Encrypt the RSA private key based on a key derived from the mnemonic.
+     * <p/>
+     * <ol>
+     * <li>derive an AES-256 key by applying PBKDF2-HMAC-SHA1 to
+     * <ul>
+     * <li>a random 40-byte salt</li>
+     * <li>the normalized mnemonic (all lowercase, all whitespace removed)</li>
+     * <li>1024 iterations</li>
+     * </ul>
+     * </li>
+     * <li>encrypt the private key using AES-GCM with the derived key</li>
+     * <li>construct a datastructure later presented as json
+     * <ul>
+     * <li>salt: the generated 40-bytes salt used during key derivation</li>
+     * <li>nonce: the generated 96-bit nonce used during GCM encryption</li>
+     * <li>authenticationTag: the authentication tag emitted by GCM</li>
+     * <li>encryptedKey: the ciphertext - not including the authenticationTag</li>
+     * </ul>
+     * </li>
+     * </ol>
+     * 
+     * @param key
+     *            the plain RSA-2048 private key
+     * @param mnemonic
+     *            the mnemonic passphrase
+     * @return a json-representable structure containing public information needed to later decrypt the key when combined with the mnemonic.
+     * @throws GeneralSecurityException
+     *             if a cryptographic operation fails
+     */
     public static PrivateKeyData encryptPrivateKey( PrivateKey key, String mnemonic ) throws GeneralSecurityException
     {
         byte[] salt = new byte[40];
@@ -92,7 +138,7 @@ public class NextcloudE2E
         
         byte[] encryptedKeyWithTag = cipher.wrap( key );
         
-        byte[] encryptedKey = Arrays.copyOfRange( encryptedKeyWithTag, 0, encryptedKeyWithTag.length - GCM_TAG_LENGTH );
+        byte[] encryptedKey = Arrays.copyOfRange( encryptedKeyWithTag, 0, encryptedKeyWithTag.length - GCM_TAG_LENGTH / 8 );
         byte[] authTag = Arrays.copyOfRange( encryptedKeyWithTag, encryptedKey.length, encryptedKeyWithTag.length );
         
         PrivateKeyData keyData = new PrivateKeyData();
