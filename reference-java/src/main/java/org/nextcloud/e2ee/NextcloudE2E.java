@@ -43,13 +43,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 public class NextcloudE2E
 {
-    public static final Provider     BC             = new BouncyCastleProvider();
-    public static final SecureRandom RNG            = new SecureRandom();
+    public static final Provider     BC               = new BouncyCastleProvider();
+    public static final SecureRandom RNG              = new SecureRandom();
     
-    public static final int          GCM_TAG_LENGTH = 128;
-    public static final String       AES_GCM        = "AES/GCM/NoPadding";
-    public static final String       RSA_OAEP       = "RSA/ECB/OAEPWithSHA-256AndMGF1Padding";
-    public static final String       PBKDF          = "PBKDF2WithHmacSHA1";
+    public static final int          GCM_TAG_LENGTH   = 128;
+    public static final int          GCM_NONCE_LENGTH = 96;
+    public static final String       AES_GCM          = "AES/GCM/NoPadding";
+    public static final String       RSA_OAEP         = "RSA/ECB/OAEPWithSHA-256AndMGF1Padding";
+    public static final String       PBKDF            = "PBKDF2WithHmacSHA1";
     
     public static Recipient findRecipient( byte[] certificate, List<Recipient> recipients ) throws CertificateEncodingException
     {
@@ -84,8 +85,7 @@ public class NextcloudE2E
         RNG.nextBytes( salt );
         SecretKey keyEncryptionKey = deriveKeyEncryptionKey( mnemonic, salt );
         
-        byte[] nonce = new byte[12];
-        RNG.nextBytes( nonce );
+        byte[] nonce = generateGcmNonce();
         
         Cipher cipher = Cipher.getInstance( AES_GCM, BC );
         cipher.init( Cipher.WRAP_MODE, keyEncryptionKey, new GCMParameterSpec( GCM_TAG_LENGTH, nonce ) );
@@ -106,7 +106,10 @@ public class NextcloudE2E
     private static SecretKey deriveKeyEncryptionKey( String mnemonic, byte[] salt ) throws GeneralSecurityException
     {
         PBEKeySpec keySpec = new PBEKeySpec(
-                normalizeMnemonic( mnemonic ),
+                mnemonic
+                        .toLowerCase()
+                        .replaceAll( "\\s", "" )
+                        .toCharArray(),
                 salt,
                 1024,
                 256 );
@@ -115,11 +118,6 @@ public class NextcloudE2E
         SecretKey kek = pbkdf.generateSecret( keySpec );
         
         return new SecretKeySpec( kek.getEncoded(), "AES" );
-    }
-    
-    private static char[] normalizeMnemonic( String mnemonic )
-    {
-        return mnemonic.toLowerCase().replace( " ", "" ).toCharArray();
     }
     
     public static SecretKey unwrapMetadataKey( PrivateKey key, byte[] ciphertext ) throws GeneralSecurityException
@@ -232,13 +230,13 @@ public class NextcloudE2E
     
     private static byte[] generateGcmNonce()
     {
-        byte[] nonce = new byte[12];
+        byte[] nonce = new byte[GCM_NONCE_LENGTH / 8];
         RNG.nextBytes( nonce );
         
         return nonce;
     }
     
-    public static SecretKey generateKey() throws NoSuchAlgorithmException
+    public static SecretKey generateAesKey() throws NoSuchAlgorithmException
     {
         return KeyGenerator.getInstance( "AES" ).generateKey();
     }
