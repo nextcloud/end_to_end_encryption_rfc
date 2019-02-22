@@ -267,6 +267,9 @@ Signature: CMS signed data, according to RFC5652
     - create byte array of JSON binary and decrypted metadata key
     - SignerIdentifier of the CMS container contains userId of the user who created the signature
 
+The encoded binary CMS structure is base64-encoded and sent in the header of the metadata request.
+The Section [Uploading payload and metadata](#uploading-payload-and-metadata-file-step-5--8) further describes how the signature is handled.
+
 ### Verifying the metadata
 Before using the metadata file, e.g. on a folder refresh the client has to verify the signature.
 The client has to find its metadata-key in the `recipients` list and decrypt it.
