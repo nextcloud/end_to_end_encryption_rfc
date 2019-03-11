@@ -329,8 +329,87 @@ QJsonObject decryptMetadata(QByteArray metadataKey, QJsonObject encryptedMetadat
     return QJsonDocument::fromJson(json).object();
 }
 
-int decryptFile(QFile encryptedSource, QFile plainTarget, QJsonObject fileInfo) {
+int decryptFile(QFile *encryptedSource, QFile *plainTarget, QJsonObject fileInfo) {
+    if (!encryptedSource->open(QIODevice::ReadOnly)) {
+      qCDebug(lcCse) << "Could not open input file for reading" << encryptedSource->errorString();
+    }
+    if (!plainTarget->open(QIODevice::WriteOnly)) {
+      qCDebug(lcCse) << "Could not open output file for writing" << plainTarget->errorString();
+    }
 
+    QByteArray key = binaryJsonProperty(fileInfo, "key");
+    QByteArray nonce = binaryJsonProperty(fileInfo, "nonce");
+    QByteArray authenticationTag = binaryJsonProperty(fileInfo, "authenticationTag");
+
+    auto rawKey = (const unsigned char *) key.constData();
+    auto rawNonce = (const unsigned char *) nonce.constData();
+
+    // Init
+    EVP_CIPHER_CTX *ctx;
+
+    /* Create and initialise the context */
+    if(!(ctx = EVP_CIPHER_CTX_new())) {
+        qCInfo(lcCse()) << "Could not create context";
+        return false;
+    }
+
+    /* Initialise the decryption operation. */
+    if(!EVP_DecryptInit_ex(ctx, EVP_aes_128_gcm(), nullptr, nullptr, nullptr)) {
+        qCInfo(lcCse()) << "Could not init cipher";
+        return false;
+    }
+
+    /* Initialise key and IV */
+    if(!EVP_DecryptInit_ex(ctx, nullptr, nullptr, rawKey, rawNonce)) {
+        qCInfo(lcCse()) << "Could not set key and nonce";
+        return false;
+    }
+
+    qint64 size = encryptedSource->size();
+
+    unsigned char *out = (unsigned char *)malloc(sizeof(unsigned char) * (1024));
+    int len = 0;
+
+    while(encryptedSource->pos() < size) {
+
+        int toRead = size - encryptedSource->pos();
+        if (toRead > 1024) {
+            toRead = 1024;
+        }
+
+        QByteArray data = encryptedSource->read(toRead);
+
+        if (data.size() == 0) {
+            qCInfo(lcCse()) << "Could not read data from file";
+            return false;
+        }
+
+        if(!EVP_DecryptUpdate(ctx, out, &len, (unsigned char *)data.constData(), data.size())) {
+            qCInfo(lcCse()) << "Could not decrypt";
+            return false;
+        }
+
+        plainTarget->write((char *)out, len);
+    }
+
+    /* Set expected tag value. Works in OpenSSL 1.0.1d and later */
+    if(!EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, authenticationTag.size(), (unsigned char *)authenticationTag.constData())) {
+        qCInfo(lcCse()) << "Could not set expected tag";
+        return false;
+    }
+
+    if(1 != EVP_DecryptFinal_ex(ctx, out, &len)) {
+        qCInfo(lcCse()) << "Could not finalize decryption (wrong tag)";
+        return false;
+    }
+    plainTarget->write((char *)out, len);
+
+    free(out);
+    EVP_CIPHER_CTX_free(ctx);
+
+    encryptedSource->close();
+    plainTarget->close();
+    return true;
 }
 
 int main(int argc, char *argv[])
@@ -374,4 +453,16 @@ int main(int argc, char *argv[])
     QJsonObject fileInfo = plainMetadata["files"].toObject()[fileId].toObject();
 
     qDebug() << plainMetadata << endl;
+
+    QFile encr("/tmp/a5604b31c1fd43229229e1af8118d849");
+    QFile decr("/tmp/plain.txt");
+
+    if (encr.open(QIODevice::WriteOnly)) {
+        encr.write(QByteArray::fromBase64("t4VeL+IQiiNWHinULQ=="));
+        encr.close();
+    } else {
+        qDebug() << "failed to open /tmp/a5604b31c1fd43229229e1af8118d849 for writing" << endl;
+    }
+
+    decryptFile(&encr, &decr, fileInfo);
 }
