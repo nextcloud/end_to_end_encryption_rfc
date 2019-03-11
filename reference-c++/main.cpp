@@ -6,6 +6,7 @@
 #include <QJsonArray>
 #include <QByteArray>
 #include <QRegularExpression>
+#include <QFile>
 
 #include <openssl/conf.h>
 #include <openssl/err.h>
@@ -14,13 +15,103 @@
 #include <openssl/pem.h>
 #include <openssl/err.h>
 #include <openssl/engine.h>
+#include <zlib.h>
 
 Q_LOGGING_CATEGORY(lcCse, "nextcloud.sync.clientsideencryption", QtInfoMsg)
 Q_LOGGING_CATEGORY(lcCseDecryption, "nextcloud.e2e", QtInfoMsg)
 Q_LOGGING_CATEGORY(lcCseMetadata, "nextcloud.metadata", QtInfoMsg)
 
-QByteArray binaryJsonProperty(QJsonObject json, QString fileName) {
-    return QByteArray::fromBase64(json[fileName].toString().toLatin1());
+QByteArray binaryJsonProperty(QJsonObject json, QString property) {
+    return QByteArray::fromBase64(json[property].toString().toLatin1());
+}
+
+// pasted from https://www.qtcentre.org/threads/30031-qUncompress-data-from-gzip
+QByteArray gzipDecompress( QByteArray compressed )
+{
+    const int CHUNK = 16384;
+
+    int ret;
+    unsigned have;
+    z_stream strm;
+    unsigned char out[CHUNK];
+
+    /* allocate inflate state */
+    strm.zalloc = Z_NULL;
+    strm.zfree = Z_NULL;
+    strm.opaque = Z_NULL;
+    strm.avail_in = 0;
+    strm.next_in = Z_NULL;
+    ret = inflateInit2(&strm, 16+MAX_WBITS);
+    if (ret != Z_OK) {
+        qDebug() << "cmpr_stream error!";
+        return {};
+    }
+
+    QByteArray uncompressed = {};
+    do {
+        strm.avail_in = compressed.size();
+        strm.next_in = (unsigned char *)compressed.data();
+
+        do {
+            strm.avail_out = CHUNK;
+            strm.next_out = out;
+            ret = inflate(&strm, Z_NO_FLUSH);
+            if (ret == Z_STREAM_ERROR) {
+                qDebug() << "inflate error!";
+                return {};
+            }
+            have = CHUNK - strm.avail_out;
+            uncompressed.append(QByteArray::fromRawData((char *)out, have));
+        } while (strm.avail_out == 0);
+
+    } while (ret != Z_STREAM_END);
+
+    return uncompressed;
+
+//    //decompress GZIP data
+
+//    //strip header and trailer
+//    compressData.remove(0, 10);
+//    compressData.chop(12);
+
+//    const int buffersize = 16384;
+//    quint8 buffer[buffersize];
+
+//    z_stream cmpr_stream;
+//    cmpr_stream.next_in = (unsigned char *)compressData.data();
+//    cmpr_stream.avail_in = compressData.size();
+//    cmpr_stream.total_in = 0;
+
+//    cmpr_stream.next_out = buffer;
+//    cmpr_stream.avail_out = buffersize;
+//    cmpr_stream.total_out = 0;
+
+//    cmpr_stream.zalloc = Z_NULL;
+//    cmpr_stream.zalloc = Z_NULL;
+
+//    if( inflateInit2(&cmpr_stream, -8 ) != Z_OK) {
+//        qDebug() << "cmpr_stream error!";
+//    }
+
+//    QByteArray uncompressed;
+//    do {
+
+//        int status = inflate( &cmpr_stream, Z_SYNC_FLUSH );
+//        if(status == Z_OK || status == Z_STREAM_END) {
+//            uncompressed.append(QByteArray::fromRawData((char *)buffer, buffersize - cmpr_stream.avail_out));
+//            cmpr_stream.next_out = buffer;
+//            cmpr_stream.avail_out = buffersize;
+//        } else {
+//            inflateEnd(&cmpr_stream);
+//            cmpr_stream.avail_out = 0;
+//        }
+
+//        if(status == Z_STREAM_END) {
+//            inflateEnd(&cmpr_stream);
+//            break;
+//        }
+//    } while(cmpr_stream.avail_out != 0);
+//    return uncompressed;
 }
 
 QByteArray deriveKeyEncryptionKey(QString& mnemonic, QByteArray& salt) {
@@ -161,26 +252,91 @@ QByteArray unwrapMetadataKey(QByteArray privateKey, QByteArray ciphertext) {
 
     unsigned char *out = (unsigned char *) OPENSSL_malloc(outlen);
     if (!out) {
-        qCInfo(lcCseDecryption()) << "Could not alloc space for the decrypted metadata";
+        qCInfo(lcCseDecryption()) << "Could not alloc space for the decrypted metadata key";
         return {};
     }
 
     if (EVP_PKEY_decrypt(ctx, out, &outlen, (unsigned char *)ciphertext.constData(), ciphertext.size()) <= 0) {
         qCInfo(lcCseDecryption()) << "Could not decrypt the data.";
-        ERR_print_errors_fp(stdout); // This line is not printing anything.
+        ERR_print_errors_fp(stdout);
+        free(out);
         return {};
     }
     qCInfo(lcCseDecryption()) << "data decrypted successfully";
 
     const auto ret = std::string((char*) out, outlen);
     QByteArray raw((const char*) out, outlen);
-    qCInfo(lcCse()) << raw;
     return raw;
+}
+
+QJsonObject decryptMetadata(QByteArray metadataKey, QJsonObject encryptedMetadata) {
+    // perform aes-128-gcm decryption
+    QByteArray nonce = binaryJsonProperty(encryptedMetadata, "nonce");
+    QByteArray authenticationTag = binaryJsonProperty(encryptedMetadata, "authenticationTag");
+    QByteArray ciphertext = binaryJsonProperty(encryptedMetadata, "ciphertext");
+
+    EVP_CIPHER_CTX *ctx;
+
+    /* Create and initialise the context */
+    if(!(ctx = EVP_CIPHER_CTX_new())) {
+        qCInfo(lcCse()) << "Could not create context";
+        return {};
+    }
+
+    /* Initialise the decryption operation. */
+    if(!EVP_DecryptInit_ex(ctx, EVP_aes_128_gcm(), nullptr, nullptr, nullptr)) {
+        qCInfo(lcCse()) << "Could not init cipher";
+        return {};
+    }
+
+    if(!EVP_DecryptInit_ex(ctx, nullptr, nullptr, (unsigned char *)metadataKey.constData(), (unsigned char *)nonce.constData())) {
+        qCInfo(lcCse()) << "Error initialising key and iv";
+        EVP_CIPHER_CTX_free(ctx);
+        return {};
+    }
+
+    unsigned char *plaintext = (unsigned char *) OPENSSL_malloc(ciphertext.size());
+    int plen;
+    if(!EVP_DecryptUpdate(ctx, plaintext, &plen, (unsigned char *)ciphertext.constData(), ciphertext.size())) {
+        qCInfo(lcCse()) << "Could not decrypt";
+        EVP_CIPHER_CTX_free(ctx);
+        free(plaintext);
+        return {};
+    }
+
+    if(!EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, authenticationTag.size(), (unsigned char *)authenticationTag.constData())) {
+        qCInfo(lcCse()) << "Could not set tag";
+        EVP_CIPHER_CTX_free(ctx);
+        free(plaintext);
+        return {};
+    }
+
+    int len = plen;
+    if (EVP_DecryptFinal_ex(ctx, plaintext + plen, &len) == 0) {
+        qCInfo(lcCse()) << "Tag did not match!";
+        EVP_CIPHER_CTX_free(ctx);
+        free(plaintext);
+        return {};
+    }
+
+    QByteArray result((char *)plaintext, plen);
+
+    free(plaintext);
+    EVP_CIPHER_CTX_free(ctx);
+
+    QByteArray json = gzipDecompress(result);
+
+    return QJsonDocument::fromJson(json).object();
+}
+
+int decryptFile(QFile encryptedSource, QFile plainTarget, QJsonObject fileInfo) {
+
 }
 
 int main(int argc, char *argv[])
 {
     QString mnemonic = "quarter plate lunch sick stone height canvas key scatter trust copper labor";
+    QString fileId = "a5604b31c1fd43229229e1af8118d849";
 
     QString encryptedPrivateKeyJson = R"JSON({
                                       "encryptedKey": "dTu0SEIcdgTsOCUEDgGPGgwyJBqkWwW8MHzLOD5RAqrKbdLF1eYJm2GGKMi812V5BQl1WBeUK42xhNUmtk4sJjEvnLyYS8nbo5B2YdLQ8XOhINQvnbSLWetByAW5s78ZUpSPpfsTBD1vdPiezgTSMBaQbulhK1OdBpvbzNHjazgfv43uTilO4Xwt3JycFmI2pdpKIRhZm+8npjaUr5hfusRa0av1MjdmB3iBes0urbvSvj9jKGmKcOZwQw4w+tdmdtQZDnVOX186LefKW9f8ThdO6avIcBA8HzuDH15jodGhirHnx46KjRktvqRSaSatPsq+vmZuvcDnV7MsKKm4QE8cR80H7HPd6jhamLPbkBPsjke6QWAWO37TP5y/tSVH3LDh1d83E+TkbZ3bxB+Wr5UIzBZI5E7hOuoToos2DdcAyo6RWduCb5QDJyj9Azz1wZ2gd4++Z/AY2Juayyekd4HBk2l/8FkIiJrBOTkUdnxeS/yzHf9gYNceFsrYVu8t8ZRe/bhitUn1u8pF023dr+KknLmDyFyXp6t0IS4Cy8F+29IrmVc8m1Kn69cFVh3/7riy9+/bLflizefH3tV+T1VqAKCFMOctmZemvU7JmJ8BdorvtEMUuJuvJqwRi1wbsqFQ6QYZehxS9/c8+dDqvGEaZJFrX1SzriXB9OB5FyhlodXg0MzatFTAHbRFdNHSdPRhiEFXQCGoB4IzcaMt6mnFRSFbLqLnuyz3Bb4+INZ26wl0+uU5+2bDoey/zcoDLWIrIZsphLZbr3UYrGBgofpWgAf2iTM/1duKDDkmnrXGi0QYadtOTKpvc2YChPrQAsPGg1eTnVcAmZQpOCBJDbSJueUcRiW7e6XK+creEiUWAhX+UjhfyDq6fdbZZW0g5BTaGGxrtNPSFrZB3n8AK4yb5cbJsL9vXHQ/ksWhzWXVYX13CN+I0WURl+dVVBjF1xgF6YlSjVWy0SrGOSeify0uGwDUwIaHJIiJnpHQtzaeE/6ySDxx7j93nCokN+8jYU+lEmB0MHnKJEv3DhkmCSgQogMly5f0gqVknXJ79Y8f/PC9IbIq1kOYxwgnK9n9rzwfaAd4AjyxaXJ+4Wbytfe6EzRJut6J+BCEw0tI/AUfeI50WsV2HMyHvaRcVP0AYFdNXy8kuc7Z05+lsCVF6Q3vbcG2sHWgXDtYbPvWgOzWvZRwjLjC8QK0apn3EYpwpgCOehjmK1r3Bv5BWK4ehgYtndb7TFwnVrDyBIRYdDuocV9i31ewpRg1r83DBSEhKZR78TI15YiYeWOXBSuV4sJFqyBMss4j0bt4DjuGFStd16ej/AAyCwnPTJ72Y6enZwwwiFCfxb1B+YJw1lE3qeN+g2xW7m067mKymjLGbK3zA2G8ck3t+SHwsAe+qxgQegwt4190mSK1g/ECIBunmrCq9kbWEtfyd8G4ePRaDszFamh1mMTYJNfO8uWRUWQ37KkwL6sMqccKc2otiz+/SE4s8PypB75VkLHE+3ZmVoAxykPNAdNLP2kVhVI/WEc/f7V+w2aBb36UMfTImeKoHKk+ylUp0D9rHXGuPVPQRkLntPjJqEukW8I97HLNJHjfZha6yTXKcHgQY/PcLe+gojDb",
@@ -192,18 +348,19 @@ int main(int argc, char *argv[])
     QString metadataJson = R"JSON({
                            "version": 1,
                            "recipients": [
-                               {
-                                   "userId": null,
-                                   "certificate": "MIIDQzCCAfegAwIBAgIBATBBBgkqhkiG9w0BAQowNKAPMA0GCWCGSAFlAwQCAQUAoRwwGgYJKoZIhvcNAQEIMA0GCWCGSAFlAwQCAQUAogMCASAwDzENMAsGA1UEAwwEdGVzdDAeFw0xOTAzMTExMDU4NDBaFw0xOTA0MTAxMDU4NDBaMA8xDTALBgNVBAMMBHRlc3QwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCO4huiznGskjF+GLJ8tf0R6SsHP50/UIu6lcrupwSeJY+sQ2wHRSMEfGQBHBMIqpFEtIWZ4L/d1+/OKdtaKlF4NiGnqJhx6Tjzl0vJPJevuYBvXUaunU3IuFloRwLgANZbe5wnMUg/+wjEYXfP15H3D+Eq1s5tX7US3+TDXchjFZGa6m33K2QQ6ocRDx3sSnzGkDrW6yxLDnVXn/hDC68YpEJ1fGkfY27HyVZ6he+SvhlFd9pJDVLZ2JkP49HrBbEywd020MjzZ44Oxrq32Zbv71Eluxsvr7L/5jH5PevKGiSQzWQgWCeR8oKEOK0Bil2UnwJtbHg2V9T9XrakmhNBAgMBAAGjQjBAMB8GA1UdIwQYMBaAFMk+BPx+d4CFe9PkJmx20lWzHh0PMB0GA1UdDgQWBBTJPgT8fneAhXvT5CZsdtJVsx4dDzBBBgkqhkiG9w0BAQowNKAPMA0GCWCGSAFlAwQCAQUAoRwwGgYJKoZIhvcNAQEIMA0GCWCGSAFlAwQCAQUAogMCASADggEBADmh/PXTMN7933Dmj+eS4B4Gnfpd7dc37mxiMA/79KaqM5P3DlmPBYCljM19L0WUCqU0OwjiMBGFnkjf7Xjbb58p04BsJqQjrOJbdHAfiNbk5LdXtIaHylND2osHsdblKbFbZsspZr30hM7Dg7yhuQx7VEA9eLFX9d6s7IgNAaQ5lJ+ZrSoQW4i0/8eIVdWXJID40eEtTEghPo+OQaMEeBReBFfSatNoynZs2jLDbFtlRLmHXr/NmaRbr/kf/CNNc5wo2+SWHD1hAJgZR22dSb4enMNwlonIQO+YwCZ3xHdGdrKVd9SMuGHJgbhmwm07aC6nI/xMZTCkTPS3oikk+no=",
-                                   "encryptedKey": "AUkr5IGhCzCgU8ALOBkUK4TiavbWHXR++ukia6Jpdpwb6OAlODK6xfMLKCetEbdkhAot5TXThLmAq1YkZtVQGY/Q1YpfYyfkfyHUUINSHuJIFiVAuKkv8IwRnDH+pypwLwj9tucKPH8qSbGf6q5eW79USmr5zCAamsdIMLkiMyirWwfI633nPxgVXYsuwDwSNI2dBIwqs4EXOZ12DKjyDmg3Lq0/LwTAMCpa4jdGPQkTYedhFrbgxQU4WkJfxvDVUA16XBkln+5urhcJlXDFzbkJhnL0hUisMxSBW/+TUvfEr/r+Hx0FfH1xuHccg6ovmFC6i1QUPl5a1Gt4MWeCbg=="
-                               }
+                           {
+                           "userId": null,
+                           "certificate": "MIIDQzCCAfegAwIBAgIBATBBBgkqhkiG9w0BAQowNKAPMA0GCWCGSAFlAwQCAQUAoRwwGgYJKoZIhvcNAQEIMA0GCWCGSAFlAwQCAQUAogMCASAwDzENMAsGA1UEAwwEdGVzdDAeFw0xOTAzMTExMDU4NDBaFw0xOTA0MTAxMDU4NDBaMA8xDTALBgNVBAMMBHRlc3QwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCO4huiznGskjF+GLJ8tf0R6SsHP50/UIu6lcrupwSeJY+sQ2wHRSMEfGQBHBMIqpFEtIWZ4L/d1+/OKdtaKlF4NiGnqJhx6Tjzl0vJPJevuYBvXUaunU3IuFloRwLgANZbe5wnMUg/+wjEYXfP15H3D+Eq1s5tX7US3+TDXchjFZGa6m33K2QQ6ocRDx3sSnzGkDrW6yxLDnVXn/hDC68YpEJ1fGkfY27HyVZ6he+SvhlFd9pJDVLZ2JkP49HrBbEywd020MjzZ44Oxrq32Zbv71Eluxsvr7L/5jH5PevKGiSQzWQgWCeR8oKEOK0Bil2UnwJtbHg2V9T9XrakmhNBAgMBAAGjQjBAMB8GA1UdIwQYMBaAFMk+BPx+d4CFe9PkJmx20lWzHh0PMB0GA1UdDgQWBBTJPgT8fneAhXvT5CZsdtJVsx4dDzBBBgkqhkiG9w0BAQowNKAPMA0GCWCGSAFlAwQCAQUAoRwwGgYJKoZIhvcNAQEIMA0GCWCGSAFlAwQCAQUAogMCASADggEBADmh/PXTMN7933Dmj+eS4B4Gnfpd7dc37mxiMA/79KaqM5P3DlmPBYCljM19L0WUCqU0OwjiMBGFnkjf7Xjbb58p04BsJqQjrOJbdHAfiNbk5LdXtIaHylND2osHsdblKbFbZsspZr30hM7Dg7yhuQx7VEA9eLFX9d6s7IgNAaQ5lJ+ZrSoQW4i0/8eIVdWXJID40eEtTEghPo+OQaMEeBReBFfSatNoynZs2jLDbFtlRLmHXr/NmaRbr/kf/CNNc5wo2+SWHD1hAJgZR22dSb4enMNwlonIQO+YwCZ3xHdGdrKVd9SMuGHJgbhmwm07aC6nI/xMZTCkTPS3oikk+no=",
+                           "encryptedKey": "AUkr5IGhCzCgU8ALOBkUK4TiavbWHXR++ukia6Jpdpwb6OAlODK6xfMLKCetEbdkhAot5TXThLmAq1YkZtVQGY/Q1YpfYyfkfyHUUINSHuJIFiVAuKkv8IwRnDH+pypwLwj9tucKPH8qSbGf6q5eW79USmr5zCAamsdIMLkiMyirWwfI633nPxgVXYsuwDwSNI2dBIwqs4EXOZ12DKjyDmg3Lq0/LwTAMCpa4jdGPQkTYedhFrbgxQU4WkJfxvDVUA16XBkln+5urhcJlXDFzbkJhnL0hUisMxSBW/+TUvfEr/r+Hx0FfH1xuHccg6ovmFC6i1QUPl5a1Gt4MWeCbg=="
+                           }
                            ],
                            "metadata": {
-                               "ciphertext": "h+O0MXCJgzscKAj69cfcuSSD2UWBR3NdFN/H3MMfHuuVY+QjqjVilIyAD5wNzblDSdV3WPeAKsgXIwzyT1VFO1FPrBEiXggodqBf9WO9+O9OJfRMyI209tja5L/BnotfIn6omeV7XPsNbU6gnGk5Co6o5Zx4xFEf39M1JNmSxsfsv6k0BUPn18C2bIVuQjQxXOJUpGQFrXD5yeWLB8J6zAV533RFhvG1+xoLH0e/5QEuslfCZubiA5JjcDrNyWnnBgu5Fu6lzivIqyE4WWQBXG/oYLHnBCJ/pZX2sZgtlcy9s1u1ADVP73KRGg==",
-                               "nonce": "8bkbBKCiXTQRRnRc",
-                               "authenticationTag": "LtT8gx9DPVoAS8IismTvbA=="
+                           "ciphertext": "h+O0MXCJgzscKAj69cfcuSSD2UWBR3NdFN/H3MMfHuuVY+QjqjVilIyAD5wNzblDSdV3WPeAKsgXIwzyT1VFO1FPrBEiXggodqBf9WO9+O9OJfRMyI209tja5L/BnotfIn6omeV7XPsNbU6gnGk5Co6o5Zx4xFEf39M1JNmSxsfsv6k0BUPn18C2bIVuQjQxXOJUpGQFrXD5yeWLB8J6zAV533RFhvG1+xoLH0e/5QEuslfCZubiA5JjcDrNyWnnBgu5Fu6lzivIqyE4WWQBXG/oYLHnBCJ/pZX2sZgtlcy9s1u1ADVP73KRGg==",
+                           "nonce": "8bkbBKCiXTQRRnRc",
+                           "authenticationTag": "LtT8gx9DPVoAS8IismTvbA=="
                            }
-                        })JSON";
+                           })JSON";
+    QByteArray encryptedFiledata = QByteArray::fromHex("b7855e2fe2108a23561e29d42d");
     QJsonObject metadata = QJsonDocument::fromJson(metadataJson.toLatin1()).object();
     QByteArray certificate = QByteArray::fromBase64("MIIDQzCCAfegAwIBAgIBATBBBgkqhkiG9w0BAQowNKAPMA0GCWCGSAFlAwQCAQUAoRwwGgYJKoZIhvcNAQEIMA0GCWCGSAFlAwQCAQUAogMCASAwDzENMAsGA1UEAwwEdGVzdDAeFw0xOTAzMTExMDU4NDBaFw0xOTA0MTAxMDU4NDBaMA8xDTALBgNVBAMMBHRlc3QwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCO4huiznGskjF+GLJ8tf0R6SsHP50/UIu6lcrupwSeJY+sQ2wHRSMEfGQBHBMIqpFEtIWZ4L/d1+/OKdtaKlF4NiGnqJhx6Tjzl0vJPJevuYBvXUaunU3IuFloRwLgANZbe5wnMUg/+wjEYXfP15H3D+Eq1s5tX7US3+TDXchjFZGa6m33K2QQ6ocRDx3sSnzGkDrW6yxLDnVXn/hDC68YpEJ1fGkfY27HyVZ6he+SvhlFd9pJDVLZ2JkP49HrBbEywd020MjzZ44Oxrq32Zbv71Eluxsvr7L/5jH5PevKGiSQzWQgWCeR8oKEOK0Bil2UnwJtbHg2V9T9XrakmhNBAgMBAAGjQjBAMB8GA1UdIwQYMBaAFMk+BPx+d4CFe9PkJmx20lWzHh0PMB0GA1UdDgQWBBTJPgT8fneAhXvT5CZsdtJVsx4dDzBBBgkqhkiG9w0BAQowNKAPMA0GCWCGSAFlAwQCAQUAoRwwGgYJKoZIhvcNAQEIMA0GCWCGSAFlAwQCAQUAogMCASADggEBADmh/PXTMN7933Dmj+eS4B4Gnfpd7dc37mxiMA/79KaqM5P3DlmPBYCljM19L0WUCqU0OwjiMBGFnkjf7Xjbb58p04BsJqQjrOJbdHAfiNbk5LdXtIaHylND2osHsdblKbFbZsspZr30hM7Dg7yhuQx7VEA9eLFX9d6s7IgNAaQ5lJ+ZrSoQW4i0/8eIVdWXJID40eEtTEghPo+OQaMEeBReBFfSatNoynZs2jLDbFtlRLmHXr/NmaRbr/kf/CNNc5wo2+SWHD1hAJgZR22dSb4enMNwlonIQO+YwCZ3xHdGdrKVd9SMuGHJgbhmwm07aC6nI/xMZTCkTPS3oikk+no=");
 
@@ -212,7 +369,9 @@ int main(int argc, char *argv[])
 
     auto metadatakey = unwrapMetadataKey(privateKey, binaryJsonProperty(recipient, "encryptedKey"));
 
-    //qDebug() << privateKey.toBase64() << endl;
-    //qDebug() << recipient << endl;
-    qDebug() << metadatakey.toHex() << endl;
+    auto plainMetadata = decryptMetadata(metadatakey, metadata["metadata"].toObject());
+
+    QJsonObject fileInfo = plainMetadata["files"].toObject()[fileId].toObject();
+
+    qDebug() << plainMetadata << endl;
 }
