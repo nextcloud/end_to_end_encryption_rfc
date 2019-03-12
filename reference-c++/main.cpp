@@ -109,9 +109,6 @@ public:
 
         return true;
     }
-//    QByteArray key = binaryJsonProperty(fileInfo, "key");
-//    QByteArray nonce = binaryJsonProperty(fileInfo, "nonce");
-//    QByteArray authenticationTag = binaryJsonProperty(fileInfo, "authenticationTag");
 };
 
 // internal?
