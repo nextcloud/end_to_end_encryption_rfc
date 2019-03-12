@@ -13,169 +13,220 @@
 #include <openssl/rsa.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
-#include <openssl/err.h>
 #include <openssl/engine.h>
 #include <zlib.h>
+
+#define CHUNK_SIZE 16384
+
+#define UNSIGNED(x) reinterpret_cast<unsigned char*>(x)
+#define SIGNED(x) reinterpret_cast<char*>(x)
 
 Q_LOGGING_CATEGORY(lcCse, "nextcloud.sync.clientsideencryption", QtInfoMsg)
 Q_LOGGING_CATEGORY(lcCseDecryption, "nextcloud.e2e", QtInfoMsg)
 Q_LOGGING_CATEGORY(lcCseMetadata, "nextcloud.metadata", QtInfoMsg)
 
-QByteArray binaryJsonProperty(QJsonObject json, QString property) {
-    return QByteArray::fromBase64(json[property].toString().toLatin1());
+
+bool jsonPropertyAsBytes(QJsonObject &json, QString property, QByteArray &result) {
+    result = QByteArray::fromBase64(json[property].toString().toLatin1());
+
+    return !result.isEmpty();
 }
 
-// pasted from https://www.qtcentre.org/threads/30031-qUncompress-data-from-gzip
-QByteArray gzipDecompress( QByteArray compressed )
-{
-    const int CHUNK = 16384;
+class EncryptedPrivatekeyData {
+public:
+    QByteArray salt;
+    QByteArray nonce;
+    QByteArray authenticationTag;
+    QByteArray encryptedKey;
 
-    int ret;
-    unsigned have;
-    z_stream strm;
-    unsigned char out[CHUNK];
+    static bool fromJson(QJsonObject &json, EncryptedPrivatekeyData &parsed) {
+        if (!jsonPropertyAsBytes(json, "salt", parsed.salt)) {
+            qCInfo(lcCse()) << "missing property salt";
+            return false;
+        }
+        if (!jsonPropertyAsBytes(json, "nonce", parsed.nonce)) {
+            qCInfo(lcCse()) << "missing property nonce";
+            return false;
+        }
+        if (!jsonPropertyAsBytes(json, "authenticationTag", parsed.authenticationTag)) {
+            qCInfo(lcCse()) << "missing property authenticationTag";
+            return false;
+        }
+        if (!jsonPropertyAsBytes(json, "encryptedKey", parsed.encryptedKey)) {
+            qCInfo(lcCse()) << "missing property encryptedKey";
+            return false;
+        }
+        return true;
+    }
+};
 
-    /* allocate inflate state */
-    strm.zalloc = Z_NULL;
-    strm.zfree = Z_NULL;
-    strm.opaque = Z_NULL;
-    strm.avail_in = 0;
-    strm.next_in = Z_NULL;
-    ret = inflateInit2(&strm, 16+MAX_WBITS);
-    if (ret != Z_OK) {
-        qDebug() << "cmpr_stream error!";
-        return {};
+class EncryptedMetadata {
+public:
+    QByteArray nonce;
+    QByteArray authenticationTag;
+    QByteArray ciphertext;
+
+    static bool fromJson(QJsonObject &json, EncryptedMetadata &parsed) {
+        if (!jsonPropertyAsBytes(json, "nonce", parsed.nonce)) {
+            qCInfo(lcCse()) << "missing property nonce";
+            return false;
+        }
+        if (!jsonPropertyAsBytes(json, "authenticationTag", parsed.authenticationTag)) {
+            qCInfo(lcCse()) << "missing property authenticationTag";
+            return false;
+        }
+        if (!jsonPropertyAsBytes(json, "ciphertext", parsed.ciphertext)) {
+            qCInfo(lcCse()) << "missing property ciphertext";
+            return false;
+        }
+        return true;
+    }
+};
+
+class FileInfo {
+public:
+    QByteArray key;
+    QByteArray nonce;
+    QByteArray authenticationTag;
+    QString name;
+    QString mimetype;
+
+    static bool fromJson(QJsonObject &json, FileInfo &parsed) {
+        if (!jsonPropertyAsBytes(json, "nonce", parsed.nonce)) {
+            qCInfo(lcCse()) << "missing property nonce";
+            return false;
+        }
+        if (!jsonPropertyAsBytes(json, "authenticationTag", parsed.authenticationTag)) {
+            qCInfo(lcCse()) << "missing property authenticationTag";
+            return false;
+        }
+        if (!jsonPropertyAsBytes(json, "key", parsed.key)) {
+            qCInfo(lcCse()) << "missing property key";
+            return false;
+        }
+        parsed.name = json["name"].toString();
+        parsed.mimetype = json["mimetype"].toString();
+
+        return true;
+    }
+//    QByteArray key = binaryJsonProperty(fileInfo, "key");
+//    QByteArray nonce = binaryJsonProperty(fileInfo, "nonce");
+//    QByteArray authenticationTag = binaryJsonProperty(fileInfo, "authenticationTag");
+};
+
+// internal?
+bool gunzip(QByteArray &compressed, QByteArray &inflated) {
+    int gz_code;
+    z_stream gunzip;
+
+    gunzip.zalloc = Z_NULL;
+    gunzip.zfree = Z_NULL;
+    gunzip.opaque = Z_NULL;
+
+    if (Z_OK != inflateInit2(&gunzip, 16+MAX_WBITS)) {
+        qDebug() << "failed to init gunzip" << endl;
+        return false;
     }
 
-    QByteArray uncompressed = {};
+    gunzip.avail_in = static_cast<unsigned int>(compressed.size());
+    gunzip.next_in = UNSIGNED(compressed.data());
+
+    char buffer[CHUNK_SIZE];
     do {
-        strm.avail_in = compressed.size();
-        strm.next_in = (unsigned char *)compressed.data();
+        gunzip.avail_out = CHUNK_SIZE;
+        gunzip.next_out = UNSIGNED(buffer);
 
-        do {
-            strm.avail_out = CHUNK;
-            strm.next_out = out;
-            ret = inflate(&strm, Z_NO_FLUSH);
-            if (ret == Z_STREAM_ERROR) {
-                qDebug() << "inflate error!";
-                return {};
-            }
-            have = CHUNK - strm.avail_out;
-            uncompressed.append(QByteArray::fromRawData((char *)out, have));
-        } while (strm.avail_out == 0);
+        gz_code = inflate(&gunzip, Z_NO_FLUSH);
+        if (gz_code == Z_STREAM_ERROR) {
+            qDebug() << "failed to perform gunzip" << endl;
+            return false;
+        }
+        inflated.append(buffer, static_cast<int>(CHUNK_SIZE - gunzip.avail_out));
+    } while (gunzip.avail_out == 0);
+    if(gz_code != Z_STREAM_END) {
+        qDebug() << "expected gunzip to be in state STREAM_END" << endl;
+        return false;
+    }
 
-    } while (ret != Z_STREAM_END);
-
-    return uncompressed;
-
-//    //decompress GZIP data
-
-//    //strip header and trailer
-//    compressData.remove(0, 10);
-//    compressData.chop(12);
-
-//    const int buffersize = 16384;
-//    quint8 buffer[buffersize];
-
-//    z_stream cmpr_stream;
-//    cmpr_stream.next_in = (unsigned char *)compressData.data();
-//    cmpr_stream.avail_in = compressData.size();
-//    cmpr_stream.total_in = 0;
-
-//    cmpr_stream.next_out = buffer;
-//    cmpr_stream.avail_out = buffersize;
-//    cmpr_stream.total_out = 0;
-
-//    cmpr_stream.zalloc = Z_NULL;
-//    cmpr_stream.zalloc = Z_NULL;
-
-//    if( inflateInit2(&cmpr_stream, -8 ) != Z_OK) {
-//        qDebug() << "cmpr_stream error!";
-//    }
-
-//    QByteArray uncompressed;
-//    do {
-
-//        int status = inflate( &cmpr_stream, Z_SYNC_FLUSH );
-//        if(status == Z_OK || status == Z_STREAM_END) {
-//            uncompressed.append(QByteArray::fromRawData((char *)buffer, buffersize - cmpr_stream.avail_out));
-//            cmpr_stream.next_out = buffer;
-//            cmpr_stream.avail_out = buffersize;
-//        } else {
-//            inflateEnd(&cmpr_stream);
-//            cmpr_stream.avail_out = 0;
-//        }
-
-//        if(status == Z_STREAM_END) {
-//            inflateEnd(&cmpr_stream);
-//            break;
-//        }
-//    } while(cmpr_stream.avail_out != 0);
-//    return uncompressed;
+    return true;
 }
 
-QByteArray deriveKeyEncryptionKey(QString& mnemonic, QByteArray& salt) {
+// internal
+bool deriveKeyEncryptionKey(QString &mnemonic, QByteArray &salt, QByteArray &derivedKey) {
     const int iterationCount = 1024;
     const int keyStrength = 256;
     const int keyLength = keyStrength/8;
 
-    auto normalizedMnemonic = mnemonic.toLower().replace(QRegularExpression("\\s"), "");
+    auto normalizedMnemonic = mnemonic
+            .toLower()
+            .replace(" ", "")
+            .replace("\t", "")
+            .replace("\r", "")
+            .replace("\n", "");
 
     unsigned char secretKey[keyLength];
-    if (1 != PKCS5_PBKDF2_HMAC_SHA1(
+    if (!PKCS5_PBKDF2_HMAC_SHA1(
                 normalizedMnemonic.toLocal8Bit().constData(),
                 normalizedMnemonic.size(),
-                (const unsigned char *)salt.constData(),
+                UNSIGNED(salt.data()),
                 salt.size(),
                 iterationCount,
                 keyLength,
                 secretKey
                 )) {
         qCInfo(lcCse()) << "kdf failed" << endl;
-        // Error out?
+        return false;
     }
 
-    return QByteArray((const char *)secretKey, keyLength);
+    derivedKey = QByteArray(SIGNED(secretKey), keyLength);
+    return true;
 }
 
-QByteArray decryptPrivateKey(QJsonObject data, QString& mnemonic) {
-    auto salt = binaryJsonProperty(data, "salt");
-    auto nonce = binaryJsonProperty(data, "nonce");
-    auto authenticationTag = binaryJsonProperty(data, "authenticationTag");
-    auto encryptedKey = binaryJsonProperty(data, "encryptedKey");
+// external
+bool decryptPrivateKey(EncryptedPrivatekeyData &keyData, QString &mnemonic, QByteArray &privateKey) {
+    auto encryptedKey = keyData.encryptedKey;
+    auto authenticationTag = keyData.authenticationTag;
 
-    auto kek = deriveKeyEncryptionKey(mnemonic, salt);
+    QByteArray kek;
+    if (!deriveKeyEncryptionKey(mnemonic, keyData.salt, kek)) {
+        qCInfo(lcCse()) << "failed to derive key";
+        return false;
+    }
 
     EVP_CIPHER_CTX *ctx;
     if(!(ctx = EVP_CIPHER_CTX_new())) {
-        return QByteArray();
+        qCInfo(lcCse()) << "failed to acquire EVP context";
+        return false;
     }
     if(!EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr)) {
+        qCInfo(lcCse()) << "failed to initialize AES-256 GCM";
         EVP_CIPHER_CTX_free(ctx);
-        return QByteArray();
+        return false;
     }
 
-    if(!EVP_DecryptInit_ex(ctx, nullptr, nullptr, (unsigned char *)kek.constData(), (unsigned char *)nonce.constData())) {
-        qCInfo(lcCse()) << "Error initialising key and iv";
+    if(!EVP_DecryptInit_ex(ctx, nullptr, nullptr,
+                           UNSIGNED(kek.data()),
+                           UNSIGNED(keyData.nonce.data()))) {
+        qCInfo(lcCse()) << "Error initialising key and nonce";
         EVP_CIPHER_CTX_free(ctx);
-        return QByteArray();
+        return false;
     }
 
-    unsigned char *ptext = (unsigned char *)calloc(encryptedKey.size() + 16, sizeof(unsigned char));
+    unsigned char *ptext = static_cast<unsigned char*>(calloc(static_cast<size_t>(encryptedKey.size()), sizeof (unsigned char)));
     int plen;
 
-    if(!EVP_DecryptUpdate(ctx, ptext, &plen, (unsigned char *)encryptedKey.constData(), encryptedKey.size())) {
+    if(!EVP_DecryptUpdate(ctx, ptext, &plen,UNSIGNED(encryptedKey.data()), encryptedKey.size())) {
         qCInfo(lcCse()) << "Could not decrypt";
         EVP_CIPHER_CTX_free(ctx);
         free(ptext);
-        return QByteArray();
+        return false;
     }
 
-    if(!EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, authenticationTag.size(), (unsigned char *)authenticationTag.constData())) {
+    if(!EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, authenticationTag.size(), UNSIGNED(authenticationTag.data()))) {
         qCInfo(lcCse()) << "Could not set tag";
         EVP_CIPHER_CTX_free(ctx);
         free(ptext);
-        return QByteArray();
+        return false;
     }
 
     int len = plen;
@@ -183,26 +234,36 @@ QByteArray decryptPrivateKey(QJsonObject data, QString& mnemonic) {
         qCInfo(lcCse()) << "Tag did not match!";
         EVP_CIPHER_CTX_free(ctx);
         free(ptext);
-        return QByteArray();
+        return false;
     }
 
-    QByteArray result((char *)ptext, plen);
-
-    free(ptext);
     EVP_CIPHER_CTX_free(ctx);
 
-    return result;
+    privateKey = QByteArray(SIGNED(ptext), plen);
+    free(ptext);
+
+    return true;
 }
 
-QJsonObject findRecipient(QByteArray certificate, QJsonArray recipients) {
+// external
+bool findRecipient(QByteArray &certificate, QJsonArray &recipients, QJsonObject &result) {
     for (int i=0; i<recipients.size(); i++) {
-        if (certificate == binaryJsonProperty(recipients[i].toObject(), "certificate")) {
-            return recipients[i].toObject();
+        QJsonObject recipient = recipients[i].toObject();
+        QByteArray recipientCert;
+        if (jsonPropertyAsBytes(recipient, "certificate", recipientCert)) {
+            if (certificate == recipientCert) {
+                result = recipient;
+                return true;
+            }
+        } else {
+            qCInfo(lcCse()) << "missing property 'certificate' on recipient";
         }
     }
-    // how to indicate, if the certificate was not found in any recipient?
+
+    return false;
 }
 
+// internal
 EVP_PKEY* toPrivateEVPKey(QByteArray pkcs8Binary) {
     BIO *privateKeyBio = BIO_new(BIO_s_mem());
     BIO_write(privateKeyBio, pkcs8Binary.constData(), pkcs8Binary.size());
@@ -210,190 +271,201 @@ EVP_PKEY* toPrivateEVPKey(QByteArray pkcs8Binary) {
     return d2i_PrivateKey_bio(privateKeyBio, nullptr);
 }
 
-QByteArray unwrapMetadataKey(QByteArray privateKey, QByteArray ciphertext) {
+// external
+bool unwrapMetadataKey(QByteArray privateKey, QByteArray ciphertext, QByteArray &metadataKey) {
     auto key = toPrivateEVPKey(privateKey);
 
     EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new(key, ENGINE_get_default_RSA());
     if (!ctx) {
         qCInfo(lcCseDecryption()) << "Could not create the PKEY context.";
-        return {};
+        return false;
     }
 
     if (EVP_PKEY_decrypt_init(ctx) <= 0) {
         qCInfo(lcCseDecryption()) << "Could not init the decryption of the metadata";
-        return {};
+        return false;
     }
 
     if (EVP_PKEY_CTX_set_rsa_padding(ctx, RSA_PKCS1_OAEP_PADDING) <= 0) {
         qCInfo(lcCseDecryption()) << "Error setting the encryption padding.";
-        return {};
+        return false;
     }
-
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wold-style-cast"
     int err = EVP_PKEY_CTX_set_rsa_oaep_md(ctx, EVP_sha256());
     if (err <= 0) {
         qCInfo(lcCseDecryption()) << "Error setting OAEP SHA 256";
-        return {};
+        return false;
     }
 
     err = EVP_PKEY_CTX_set_rsa_mgf1_md(ctx, EVP_sha256());
     if (err <= 0) {
         qCInfo(lcCseDecryption()) << "Error setting MGF1 padding";
-        return {};
+        return false;
     }
+#pragma GCC diagnostic pop
 
     size_t outlen = 0;
-    err = EVP_PKEY_decrypt(ctx, nullptr, &outlen,  (unsigned char *)ciphertext.constData(), ciphertext.size());
+    err = EVP_PKEY_decrypt(ctx, nullptr, &outlen,  UNSIGNED(ciphertext.data()), static_cast<size_t>(ciphertext.size()));
     if ( err <= 0) {
         qCInfo(lcCseDecryption()) << "Could not determine the buffer length";
-        return {};
+        return false;
     }
-    qCInfo(lcCseDecryption()) << "Size of output is: " << outlen;
-    qCInfo(lcCseDecryption()) << "Size of data is: " << ciphertext.size();
 
-    unsigned char *out = (unsigned char *) OPENSSL_malloc(outlen);
+    unsigned char *out = static_cast<unsigned char*>(OPENSSL_malloc(outlen));
     if (!out) {
         qCInfo(lcCseDecryption()) << "Could not alloc space for the decrypted metadata key";
-        return {};
+        return false;
     }
 
-    if (EVP_PKEY_decrypt(ctx, out, &outlen, (unsigned char *)ciphertext.constData(), ciphertext.size()) <= 0) {
+    if (EVP_PKEY_decrypt(ctx,
+                         out,
+                         &outlen,
+                         UNSIGNED(ciphertext.data()),
+                         static_cast<size_t>(ciphertext.size()))
+            <= 0) {
         qCInfo(lcCseDecryption()) << "Could not decrypt the data.";
         ERR_print_errors_fp(stdout);
-        free(out);
-        return {};
+        OPENSSL_clear_free(out, outlen);
+        return false;
     }
     qCInfo(lcCseDecryption()) << "data decrypted successfully";
 
-    const auto ret = std::string((char*) out, outlen);
-    QByteArray raw((const char*) out, outlen);
-    return raw;
+    metadataKey = QByteArray(SIGNED(out), static_cast<int>(outlen));
+    OPENSSL_clear_free(out, outlen);
+
+    return true;
 }
 
-QJsonObject decryptMetadata(QByteArray metadataKey, QJsonObject encryptedMetadata) {
+// external
+bool decryptMetadata(QByteArray &metadataKey, EncryptedMetadata &encryptedMetadata, QJsonObject &metadata) {
     // perform aes-128-gcm decryption
-    QByteArray nonce = binaryJsonProperty(encryptedMetadata, "nonce");
-    QByteArray authenticationTag = binaryJsonProperty(encryptedMetadata, "authenticationTag");
-    QByteArray ciphertext = binaryJsonProperty(encryptedMetadata, "ciphertext");
 
     EVP_CIPHER_CTX *ctx;
 
     /* Create and initialise the context */
     if(!(ctx = EVP_CIPHER_CTX_new())) {
         qCInfo(lcCse()) << "Could not create context";
-        return {};
+        return false;
     }
 
     /* Initialise the decryption operation. */
     if(!EVP_DecryptInit_ex(ctx, EVP_aes_128_gcm(), nullptr, nullptr, nullptr)) {
         qCInfo(lcCse()) << "Could not init cipher";
-        return {};
+        return false;
     }
 
-    if(!EVP_DecryptInit_ex(ctx, nullptr, nullptr, (unsigned char *)metadataKey.constData(), (unsigned char *)nonce.constData())) {
+    if(!EVP_DecryptInit_ex(ctx, nullptr, nullptr, UNSIGNED(metadataKey.data()), UNSIGNED(encryptedMetadata.nonce.data()))) {
         qCInfo(lcCse()) << "Error initialising key and iv";
         EVP_CIPHER_CTX_free(ctx);
-        return {};
+        return false;
     }
 
-    unsigned char *plaintext = (unsigned char *) OPENSSL_malloc(ciphertext.size());
+    size_t plainlen = static_cast<size_t>(encryptedMetadata.ciphertext.size());
+    unsigned char *plaintext = static_cast<unsigned char*>(OPENSSL_malloc(plainlen));
     int plen;
-    if(!EVP_DecryptUpdate(ctx, plaintext, &plen, (unsigned char *)ciphertext.constData(), ciphertext.size())) {
+    if(!EVP_DecryptUpdate(ctx, plaintext, &plen, UNSIGNED(encryptedMetadata.ciphertext.data()), encryptedMetadata.ciphertext.size())) {
         qCInfo(lcCse()) << "Could not decrypt";
         EVP_CIPHER_CTX_free(ctx);
-        free(plaintext);
-        return {};
+        OPENSSL_clear_free(plaintext, plainlen);
+        return false;
     }
 
-    if(!EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, authenticationTag.size(), (unsigned char *)authenticationTag.constData())) {
+    if(!EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, encryptedMetadata.authenticationTag.size(), UNSIGNED(encryptedMetadata.authenticationTag.data()))) {
         qCInfo(lcCse()) << "Could not set tag";
         EVP_CIPHER_CTX_free(ctx);
-        free(plaintext);
-        return {};
+        OPENSSL_clear_free(plaintext, plainlen);
+        return false;
     }
 
     int len = plen;
     if (EVP_DecryptFinal_ex(ctx, plaintext + plen, &len) == 0) {
         qCInfo(lcCse()) << "Tag did not match!";
         EVP_CIPHER_CTX_free(ctx);
-        free(plaintext);
-        return {};
+        OPENSSL_clear_free(plaintext, plainlen);
+        return false;
     }
 
-    QByteArray result((char *)plaintext, plen);
+    QByteArray result(SIGNED(plaintext), plen);
 
-    free(plaintext);
+    OPENSSL_clear_free(plaintext, plainlen);
     EVP_CIPHER_CTX_free(ctx);
 
-    QByteArray json = gzipDecompress(result);
+    QByteArray json{};
+    if (!gunzip(result, json)) {
+        qDebug() << "failed to inflate decrypted json" << endl;
+        return false;
+    }
 
-    return QJsonDocument::fromJson(json).object();
+    metadata = QJsonDocument::fromJson(json).object();
+    return true;
 }
 
-int decryptFile(QFile *encryptedSource, QFile *plainTarget, QJsonObject fileInfo) {
-    if (!encryptedSource->open(QIODevice::ReadOnly)) {
-      qCDebug(lcCse) << "Could not open input file for reading" << encryptedSource->errorString();
+// external
+bool decryptFile(QString encryptedFilename, QString plainFilename, FileInfo &fileInfo) {
+    QFile encryptedSource(encryptedFilename);
+    if (!encryptedSource.open(QIODevice::ReadOnly)) {
+      qCDebug(lcCse) << "Could not open input file for reading" << encryptedSource.errorString();
+      return false;
     }
-    if (!plainTarget->open(QIODevice::WriteOnly)) {
-      qCDebug(lcCse) << "Could not open output file for writing" << plainTarget->errorString();
+    QFile plainTarget(plainFilename);
+    if (!plainTarget.open(QIODevice::WriteOnly)) {
+      qCDebug(lcCse) << "Could not open output file for writing" << plainTarget.errorString();
+      return false;
     }
 
-    QByteArray key = binaryJsonProperty(fileInfo, "key");
-    QByteArray nonce = binaryJsonProperty(fileInfo, "nonce");
-    QByteArray authenticationTag = binaryJsonProperty(fileInfo, "authenticationTag");
+    QByteArray key = fileInfo.key;
+    QByteArray nonce = fileInfo.nonce;
+    QByteArray authenticationTag = fileInfo.authenticationTag;
 
-    auto rawKey = (const unsigned char *) key.constData();
-    auto rawNonce = (const unsigned char *) nonce.constData();
-
-    // Init
     EVP_CIPHER_CTX *ctx;
 
-    /* Create and initialise the context */
     if(!(ctx = EVP_CIPHER_CTX_new())) {
         qCInfo(lcCse()) << "Could not create context";
         return false;
     }
 
-    /* Initialise the decryption operation. */
+    // AES-128
     if(!EVP_DecryptInit_ex(ctx, EVP_aes_128_gcm(), nullptr, nullptr, nullptr)) {
-        qCInfo(lcCse()) << "Could not init cipher";
+        qCInfo(lcCse()) << "Could not init AES-128 GCM cipher";
         return false;
     }
 
-    /* Initialise key and IV */
-    if(!EVP_DecryptInit_ex(ctx, nullptr, nullptr, rawKey, rawNonce)) {
+    // provide key and nonce
+    if(!EVP_DecryptInit_ex(ctx, nullptr, nullptr, UNSIGNED(key.data()), UNSIGNED(nonce.data()))) {
         qCInfo(lcCse()) << "Could not set key and nonce";
         return false;
     }
 
-    qint64 size = encryptedSource->size();
+    qint64 size = encryptedSource.size();
 
-    unsigned char *out = (unsigned char *)malloc(sizeof(unsigned char) * (1024));
-    int len = 0;
 
-    while(encryptedSource->pos() < size) {
+    unsigned char *out = static_cast<unsigned char*>(OPENSSL_malloc(CHUNK_SIZE));
+    int len;
 
-        int toRead = size - encryptedSource->pos();
-        if (toRead > 1024) {
-            toRead = 1024;
+    while(!encryptedSource.atEnd()) {
+
+        qint64 toRead = size - encryptedSource.pos();
+        if (toRead > CHUNK_SIZE) {
+            toRead = CHUNK_SIZE;
         }
 
-        QByteArray data = encryptedSource->read(toRead);
+        QByteArray data = encryptedSource.read(toRead);
 
         if (data.size() == 0) {
             qCInfo(lcCse()) << "Could not read data from file";
             return false;
         }
 
-        if(!EVP_DecryptUpdate(ctx, out, &len, (unsigned char *)data.constData(), data.size())) {
+        if(!EVP_DecryptUpdate(ctx, out, &len, UNSIGNED(data.data()), data.size())) {
             qCInfo(lcCse()) << "Could not decrypt";
             return false;
         }
 
-        plainTarget->write((char *)out, len);
+        plainTarget.write(SIGNED(out), len);
     }
 
-    /* Set expected tag value. Works in OpenSSL 1.0.1d and later */
-    if(!EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, authenticationTag.size(), (unsigned char *)authenticationTag.constData())) {
+    if(!EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, authenticationTag.size(), UNSIGNED(authenticationTag.data()))) {
         qCInfo(lcCse()) << "Could not set expected tag";
         return false;
     }
@@ -402,17 +474,42 @@ int decryptFile(QFile *encryptedSource, QFile *plainTarget, QJsonObject fileInfo
         qCInfo(lcCse()) << "Could not finalize decryption (wrong tag)";
         return false;
     }
-    plainTarget->write((char *)out, len);
 
-    free(out);
+    OPENSSL_clear_free(out, CHUNK_SIZE);
     EVP_CIPHER_CTX_free(ctx);
 
-    encryptedSource->close();
-    plainTarget->close();
     return true;
 }
 
+// for sample only
+bool writeData(QString filename, QByteArray data) {
+    QFile file(filename);
+    if (!file.open(QIODevice::WriteOnly)) {
+      qCDebug(lcCse) << "Could not open output file for writing" << file.errorString();
+      return false;
+    }
+
+    file.write(data);
+    return true;
+}
+
+// for sample only
+bool cat(QString filename) {
+    QFile file(filename);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+        return false;
+
+    while (!file.atEnd()) {
+        QByteArray line = file.readLine();
+        qDebug() << line;
+    }
+    return true;
+}
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
 int main(int argc, char *argv[])
+#pragma GCC diagnostic pop
 {
     QString mnemonic = "quarter plate lunch sick stone height canvas key scatter trust copper labor";
     QString fileId = "a5604b31c1fd43229229e1af8118d849";
@@ -423,7 +520,6 @@ int main(int argc, char *argv[])
                                       "nonce": "ylcAiZwWjnWhdy6J",
                                       "authenticationTag": "2WGigGHgD2n2daIk+OhlFQ=="
                                       })JSON";
-    QJsonObject encryptedPrivateKeyData = QJsonDocument::fromJson(encryptedPrivateKeyJson.toLatin1()).object();
     QString metadataJson = R"JSON({
                            "version": 1,
                            "recipients": [
@@ -439,30 +535,67 @@ int main(int argc, char *argv[])
                            "authenticationTag": "LtT8gx9DPVoAS8IismTvbA=="
                            }
                            })JSON";
-    QByteArray encryptedFiledata = QByteArray::fromHex("b7855e2fe2108a23561e29d42d");
+    QByteArray encryptedFiledata = QByteArray::fromBase64("t4VeL+IQiiNWHinULQ==");
+
+    QJsonObject encryptedPrivateKeyData = QJsonDocument::fromJson(encryptedPrivateKeyJson.toLatin1()).object();
     QJsonObject metadata = QJsonDocument::fromJson(metadataJson.toLatin1()).object();
     QByteArray certificate = QByteArray::fromBase64("MIIDQzCCAfegAwIBAgIBATBBBgkqhkiG9w0BAQowNKAPMA0GCWCGSAFlAwQCAQUAoRwwGgYJKoZIhvcNAQEIMA0GCWCGSAFlAwQCAQUAogMCASAwDzENMAsGA1UEAwwEdGVzdDAeFw0xOTAzMTExMDU4NDBaFw0xOTA0MTAxMDU4NDBaMA8xDTALBgNVBAMMBHRlc3QwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCO4huiznGskjF+GLJ8tf0R6SsHP50/UIu6lcrupwSeJY+sQ2wHRSMEfGQBHBMIqpFEtIWZ4L/d1+/OKdtaKlF4NiGnqJhx6Tjzl0vJPJevuYBvXUaunU3IuFloRwLgANZbe5wnMUg/+wjEYXfP15H3D+Eq1s5tX7US3+TDXchjFZGa6m33K2QQ6ocRDx3sSnzGkDrW6yxLDnVXn/hDC68YpEJ1fGkfY27HyVZ6he+SvhlFd9pJDVLZ2JkP49HrBbEywd020MjzZ44Oxrq32Zbv71Eluxsvr7L/5jH5PevKGiSQzWQgWCeR8oKEOK0Bil2UnwJtbHg2V9T9XrakmhNBAgMBAAGjQjBAMB8GA1UdIwQYMBaAFMk+BPx+d4CFe9PkJmx20lWzHh0PMB0GA1UdDgQWBBTJPgT8fneAhXvT5CZsdtJVsx4dDzBBBgkqhkiG9w0BAQowNKAPMA0GCWCGSAFlAwQCAQUAoRwwGgYJKoZIhvcNAQEIMA0GCWCGSAFlAwQCAQUAogMCASADggEBADmh/PXTMN7933Dmj+eS4B4Gnfpd7dc37mxiMA/79KaqM5P3DlmPBYCljM19L0WUCqU0OwjiMBGFnkjf7Xjbb58p04BsJqQjrOJbdHAfiNbk5LdXtIaHylND2osHsdblKbFbZsspZr30hM7Dg7yhuQx7VEA9eLFX9d6s7IgNAaQ5lJ+ZrSoQW4i0/8eIVdWXJID40eEtTEghPo+OQaMEeBReBFfSatNoynZs2jLDbFtlRLmHXr/NmaRbr/kf/CNNc5wo2+SWHD1hAJgZR22dSb4enMNwlonIQO+YwCZ3xHdGdrKVd9SMuGHJgbhmwm07aC6nI/xMZTCkTPS3oikk+no=");
+    QJsonArray recipients = metadata["recipients"].toArray();
 
-    auto privateKey = decryptPrivateKey(encryptedPrivateKeyData, mnemonic);
-    auto recipient = findRecipient(certificate, metadata["recipients"].toArray());
-
-    auto metadatakey = unwrapMetadataKey(privateKey, binaryJsonProperty(recipient, "encryptedKey"));
-
-    auto plainMetadata = decryptMetadata(metadatakey, metadata["metadata"].toObject());
-
-    QJsonObject fileInfo = plainMetadata["files"].toObject()[fileId].toObject();
-
-    qDebug() << plainMetadata << endl;
-
-    QFile encr("/tmp/a5604b31c1fd43229229e1af8118d849");
-    QFile decr("/tmp/plain.txt");
-
-    if (encr.open(QIODevice::WriteOnly)) {
-        encr.write(QByteArray::fromBase64("t4VeL+IQiiNWHinULQ=="));
-        encr.close();
-    } else {
-        qDebug() << "failed to open /tmp/a5604b31c1fd43229229e1af8118d849 for writing" << endl;
+    EncryptedPrivatekeyData privatekeyData;
+    if (!EncryptedPrivatekeyData::fromJson(encryptedPrivateKeyData, privatekeyData)) {
+        qDebug() << "failed to parse encrypted private key data" << endl;
+        return 1;
     }
 
-    decryptFile(&encr, &decr, fileInfo);
+    QByteArray privateKey;
+    if (!decryptPrivateKey(privatekeyData, mnemonic, privateKey)) {
+        qDebug() << "failed to decrypt private key" << endl;
+        return 1;
+    }
+    QJsonObject recipient;
+    if (!findRecipient(certificate, recipients, recipient)) {
+        qDebug() << "not encrypted for me" << endl;
+        return 1;
+    }
+
+    QByteArray encryptedMetadataKey;
+    if (!jsonPropertyAsBytes(recipient, "encryptedKey", encryptedMetadataKey)) {
+        qDebug() << "missing property 'encryptedKey'";
+        return 1;
+    }
+
+    QByteArray metadatakey;
+    if (!unwrapMetadataKey(privateKey, encryptedMetadataKey, metadatakey)) {
+        qDebug() << "failed to decrypt metadata key";
+        return 1;
+    }
+
+    QJsonObject encryptedMetadataJson = metadata["metadata"].toObject();
+    EncryptedMetadata encryptedMetadata;
+    if (!EncryptedMetadata::fromJson(encryptedMetadataJson, encryptedMetadata)) {
+        qDebug() << "failed to parse encrypted metadata json" << endl;
+        return 1;
+    }
+    QJsonObject plainMetadata;
+    if (!decryptMetadata(metadatakey, encryptedMetadata, plainMetadata)) {
+        qDebug() << "failed to decrypt metadata" << endl;
+        return 1;
+    }
+
+    QJsonObject fileInfoJson = plainMetadata["files"].toObject()[fileId].toObject();
+    FileInfo fileInfo;
+    if (!FileInfo::fromJson(fileInfoJson, fileInfo)) {
+        qDebug() << "failed to parse file info json" << endl;
+        return 1;
+    }
+
+    writeData("/tmp/a5604b31c1fd43229229e1af8118d849", encryptedFiledata);
+
+    decryptFile("/tmp/a5604b31c1fd43229229e1af8118d849", "/tmp/plain.txt", fileInfo);
+
+    if (!cat("/tmp/plain.txt")) {
+        qDebug() << "failed to dump plaintext content";
+        return 1;
+    }
 }
