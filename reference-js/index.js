@@ -1,7 +1,6 @@
 const { gunzip } = require("zlib");
 const forge = require("node-forge");
 const { promisify } = require("util");
-const { readFile, writeFile } = require("fs").promises;
 
 function findRecipient(certificate, recipients) {
   for (const recipient of recipients) {
@@ -111,7 +110,7 @@ async function encryptMetadata(metadataKey, metadata) {
   // NYI
 }
 
-async function decryptFile(info, encryptedFile, target) {
+async function* decryptFile(info, encryptedStream) {
   const aesgcm = forge.cipher.createDecipher(
     "AES-GCM",
     forge.util.createBuffer(forge.util.decode64(info.key))
@@ -121,14 +120,17 @@ async function decryptFile(info, encryptedFile, target) {
     tag: forge.util.decode64(info.authenticationTag)
   });
 
-  const plain = await readFile(encryptedFile);
+  for await (const chunk of encryptedStream) {
+    aesgcm.update(forge.util.createBuffer(chunk));
 
-  aesgcm.update(forge.util.createBuffer(plain));
+    yield Buffer.from(aesgcm.output.getBytes(), "binary");
+  }
+
   if (!aesgcm.finish()) {
     throw new TypeError("wrong tag");
   }
 
-  await writeFile(target, Buffer.from(aesgcm.output.data, "binary"));
+  yield Buffer.from(aesgcm.output.getBytes(), "binary");
 }
 
 async function encryptFile(plainFile, target, mimetype) {

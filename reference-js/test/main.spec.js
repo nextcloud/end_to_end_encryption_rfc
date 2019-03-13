@@ -1,5 +1,5 @@
 const api = require("..");
-const { readFile, unlink } = require("fs").promises;
+const fs = require("fs");
 const keyData = require("./data/keydata.json");
 const metadata = require("./data/metadata.json");
 
@@ -79,10 +79,14 @@ test("decrypt the file content", async () => {
   );
 
   const fileinfo = plainMetadata.files[fileid];
-  const encryptedFile = __dirname + "/data/a5604b31c1fd43229229e1af8118d849";
+  const encryptedStream = fs.createReadStream(
+    __dirname + "/data/a5604b31c1fd43229229e1af8118d849"
+  );
 
-  await api.decryptFile(fileinfo, encryptedFile, "/tmp/plain.txt");
-  expect(await readFile("/tmp/plain.txt", "utf8")).toEqual("Hello World!\n");
+  const chunks = [];
+  for await (const plainChunk of api.decryptFile(fileinfo, encryptedStream)) {
+    chunks.push(plainChunk);
+  }
 
-  await unlink("/tmp/plain.txt");
+  expect(Buffer.concat(chunks).toString()).toEqual("Hello World!\n");
 });
