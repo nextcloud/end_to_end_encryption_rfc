@@ -489,7 +489,7 @@ To implement CRLs the clients would always check if a key was revoked before the
 
 ### AES+GCM
 * saltLength: 40 bytes
-* PBKDF2 key derivation iterations: 1024 TODO: check if we can increase to >=10.000
+* PBKDF2 key derivation iterations: 1024 TODO: check if we can increase to >=100.000
 * keyLength: 32 bytes (256 bit)
 
 ## Scenarios
