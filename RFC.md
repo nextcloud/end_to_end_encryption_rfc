@@ -250,11 +250,11 @@ To keep the metadata and the file in sync locking is required. The client needs 
 
 After locking was successful, the client will upload the encrypted file and afterwards the metadata file. If both files are uploaded successfully, the client will finish the operation by sending an unlock request.
 
-To lock the metadata a POST request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/lock/<file-id>` has to be sent. Whereas `<file-id>` has to be the file ID indicated by our WebDAV API. To add an existing lock token it can be sent as `token` parameter.
+To lock the metadata a POST request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/lock/<file-id>` has to be sent. Whereas `<file-id>` has to be the file ID indicated by our WebDAV API. To add an existing lock token it can be sent as `e2e-token` parameter.
 
-To update the metadata a PUT request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/meta-data/<file-id>` has to be sent. Whereas `<file-id>` has to be the file ID indicated by our WebDAV API. As parameters “token”, which contains the current lock token, and “metadata”, containing the encrypted metadata have to be sent.
+To update the metadata a PUT request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/meta-data/<file-id>` has to be sent. Whereas `<file-id>` has to be the file ID indicated by our WebDAV API. As parameters “e2e-token”, which contains the current lock token, and “metadata”, containing the encrypted metadata have to be sent.
 
-To unlock the metadata a DELETE request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/lock/<file-id>` has to be sent. Whereas `<file-id>` has to be the file ID indicated by our WebDAV API. The previously received lock token has to be sent as `token` parameter.
+To unlock the metadata a DELETE request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/lock/<file-id>` has to be sent. Whereas `<file-id>` has to be the file ID indicated by our WebDAV API. The previously received lock token has to be sent as `e2e-token` parameter.
 
 ### Uploading a file into an end-to-end encrypted folder
 To upload a file in an end-to-end encrypted folder the client has to differentiate whether it is a new file or an existing file that gets updated.
