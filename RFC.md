@@ -269,7 +269,7 @@ In case a new file is uploaded the client has to do the following steps:
     2. Generate a new 128-bit IV for the file
     3. Encrypt the file using the key and IV with AES/GCM/NoPadding
     4. Save the authenticationTag
-2. Generate a UUID like identifier (UUID, ther remove "-", must follow /^[0-9a-fA-F]{32}$/) and upload the encrypted file via WebDAV using the random identifier as file ID
+2. Generate a UUID-like identifier (UUID with "-" removed, must follow /^[0-9a-fA-F]{32}$/) and upload the encrypted file via WebDAV using the random identifier as file ID
 3. Add new file to the files array in the metadata file
     1. Add file info
     2. Add key
