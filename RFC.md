@@ -153,7 +153,7 @@ First, the client has to generate the relevant key material:
 In a second step, the private key will be stored encrypted on the server to simplify the addition of further devices:
 
 1. Client generates a 12 word long mnemonic from the english BIP-0039 word list. The word list contains 2048 words, thus resulting in 2048^12 possible key combinations.
-2. Client encrypts the private key using AES/GCM/NoPadding as cipher (256 bit key size) and uses PBKDF2WithHmacSHA1 as key derivation, as password the mnemonic generated in step 1 is used. The needed salt and initizialization vector is appended to the cipher text with base 64 encoded "|":  encryptedAndEncryptedBytes + "fA==" + encodedIV + "fA==" + encodedSalt
+2. Client encrypts the private key using AES/GCM/NoPadding as cipher (256 bit key size) and uses PBKDF2WithHmacSHA1 as key derivation, as password the mnemonic generated in step 1 is used. The needed salt and initialization vector is appended to the cipher text with plain "|":  encryptedAndEncryptedBytes + "|" + encodedIV + "|" + encodedSalt
 3. Client uploads the encrypted X.509 private key to the server by sending the encrypted private key URL encoded as parameter `privateKey` to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/private-key`. 
 4. The mnemonic is displayed to the user and the user is asked to store a copy in a secure place. For convenient reasons the mnemonic can be displayed with whitespaces, but the string for encrypting/decrypting must have no whitespaces and be lowercase.
 5. The mnemonic is stored in the keychain of the device (ideally with spaces so it can be shown more readable).
@@ -188,7 +188,7 @@ The metadata is a JSON document with the following structure. The `metadata->met
 
 In case the central data recovery key is enabled the metadata will also be encrypted towards the servers central data recovery key. Clients must show a prominent warning to the users for such scenarios.
 
-The only unencrypted elements in the JSON document is the version of the metadata file. The other informations are all encrypted either based on the public key or the actual metadata keys. The encrypted JSON array elements should just be encrypted as simple string element. This means that  “foo => [bar, foo]” should become “foo => “ciphertext” and the clients are responsible for decoding this ciphertext in a proper array again.
+The only unencrypted elements in the JSON document is the version of the metadata file. The other information are all encrypted either based on the public key or the actual metadata keys. The encrypted JSON array elements should just be encrypted as simple string element. This means that  “foo => [bar, foo]” should become “foo => “ciphertext” and the clients are responsible for decoding this ciphertext in a proper array again.
 
 ```
 {
@@ -279,6 +279,7 @@ In case a new file is uploaded the client has to do the following steps:
 
 #### Updating existing files
 In case an existing file is updated the client has to do the following steps:
+
 1. Encrypt the file
     1. Generate a new 128-bit encryption key for the file
     2. Generate a new 128-bit IV for the file
@@ -294,6 +295,7 @@ In case an existing file is updated the client has to do the following steps:
 
 #### Accessing encrypted files 
 To access encrypted files the client has to do the following steps:
+
 1. Download actual metadata of encrypted folder
 2. Loop over “files” array and decrypt the array with the newest metadata key
 3. Download the referenced files using WebDAV
@@ -403,7 +405,7 @@ We have some defined constants to use for encryption and decryption of the priva
 * saltLength: 40 bytes
 * iterations: 1024
 * keyLength: 32 bytes (256 bit)
-* ivDelimiter: "fA=="
+* ivDelimiter: "|"
 
 #### Encryption
 
