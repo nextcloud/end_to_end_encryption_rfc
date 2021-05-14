@@ -148,7 +148,8 @@ First, the client has to generate the relevant key material:
 2. Client uploads the X.509 certificate request to the server by sending the certificate request URL encoded as parameter `csr` to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/public-key`.
 3. Server issues a certificate if the CN matches the current user ID.
 4. Server returns the issued certificate.
-5. Client stores the private and the certificate in the keychain of the device.
+5. Client verifies their certificate was signed by the server (checking the servers public key from /ocs/v2.php/apps/end\_to\_end\_encryption/api/v1/server-key)
+6. Client stores the private and the certificate in the keychain of the device.
 
 In a second step, the private key will be stored encrypted on the server to simplify the addition of further devices:
 
@@ -166,8 +167,9 @@ In case a certificate exists already for the user the client has to download the
 1. Client downloads private key from the `/ocs/v2.php/apps/end_to_end_encryption/api/v1/private-key` endpoint.
 2. Client asks the user for the mnemonic and decrypts the private key using AES/GCM/NoPadding as cipher (256 bit key size) and PBKDF2WithHmacSHA1 as key derivation. 
 3. Client checks if private key belongs to previously downloaded public certificate.
-4. Client stores the private key in the keychain of the device.
-5. The mnemonic is stored in the keychain of the device (ideally with spaces so it can be shown more readable).
+4. Client checks if their certificate was signed by the server (checking the servers public key from /ocs/v2.php/apps/end\_to\_end\_encryption/api/v1/server-key)
+5. Client stores the private key in the keychain of the device.
+6. The mnemonic is stored in the keychain of the device (ideally with spaces so it can be shown more readable).
 
 ### Creating an end-to-end encrypted folder
 To create an end-to-end encrypted folders multiple steps have to be performed. First of all, data access to such folders happens via our regular WebDAV API available at `/remote.php/dav/$userId/files`.
