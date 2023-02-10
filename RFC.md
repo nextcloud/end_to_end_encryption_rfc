@@ -124,7 +124,7 @@ The following steps will walk through the technical implementation of the encryp
 * file-key: the actual key used to encrypt the file
 * folders-array: associative array mapping random identifiers names to folder name
 * files-array: associative array mapping random identifiers names to the (encrypted) metadata of the file
-* recipients-array: array of information of recipients. Used to list the users of a shared and encrypted folder, with their certificate and the encrypted metadata key
+* users-array: array of information of users. Used to list all users of a shared and encrypted folder, with their certificate and the encrypted metadata key
 * metadata-key: key used to encrypt the metadata of the folder
 * metadata: metadata of all files (file-metadata) and sub-folders in the encrypted folder, list of checksums of metadata-keys and a counter
 
@@ -195,7 +195,7 @@ Every folder contains a metadata file containing the following information:
 
 * metadata of all files (file-metadata) and sub-folders
 * list of checksums of metadata-keys
-* recipients array
+* users array
 * counter
 
 The metadata is a JSON document with the following structure depicted below.
@@ -208,13 +208,14 @@ Clients must show a prominent warning to the users for such scenarios.
 ```
 {
   "metadata": {
-    "ciphertext": "encrypted metadata of folder (see below for the plaintext structure).
+    "ciphertext": "encrypted metadata (AES/GCM/NoPadding, 128 bit key size) of folder (see below for the plaintext structure).
                 first gzipped, then encrypted, then base64 encoded.",
     "nonce": "123",
     "authenticationTag": "123"
   }
-  "recipients": [ 
-     // The following contains the reference to all users who have access to the share.
+  "users": [ 
+     // The following contains the reference to all users who have access to the share, including owner.
+     // A newly created folder thus will also have this array with the owner as its first entry.
      // The metadata-key is encrypted with RSA/ECB/OAEPWithSHA-256AndMGF1Padding
     { 
       "userId": "testUser"
@@ -222,7 +223,7 @@ Clients must show a prominent warning to the users for such scenarios.
       "encryptedMetadataKey": "encrypted metadata-key then base64"
     }
   ],
-  "version": 1, 
+  "version": 2, 
 }
 ```
 
@@ -254,8 +255,8 @@ Metadata:
 When creating a new folder, an initial metadata file needs to be created with following values
 - counter starts with 0
 - generate a new metadata key
-- if folder is topmost encrypted folder, the recipients array contains the current user with userId, certificate and encrypted metadata key
-- if folder is a subfolder of an encrypted folder, the recipients-array is not included
+- if folder is topmost encrypted folder, the users array contains the current user with userId, certificate and encrypted metadata key
+- if folder is a subfolder of an encrypted folder, the users-array is not included
 
 The metadata has to be created by sending a POST request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/meta-data/<folder-id>`, where `<folder-id>` has to be the folder ID indicated by our WebDAV API. 
 The POST parameter `metaData` with the encrypted metadata has to be used.
@@ -272,7 +273,7 @@ The Section [Uploading payload and metadata](#uploading-payload-and-metadata-fil
 
 ### Verifying the metadata
 Before using the metadata file, e.g. on a folder refresh the client has to verify the signature.
-The client has to find its metadata-key in the `recipients` list and decrypt it.
+The client has to find its metadata-key in the `users` list and decrypt it.
 Then the client passes the JSON binary and the decrypted metadata-key to the verification algorithm.
 
 If any of the following checks fail, the client needs to refuse further sync and informs the user:
@@ -280,7 +281,7 @@ If any of the following checks fail, the client needs to refuse further sync and
 - check signature
 - check that hash of metadata-key is in keyChecksums
 - check that no hash has been removed from the keyChecksums
-- check if cert of all recipients is issued by the CA
+- check if cert of all users is issued by the CA
 
 ### Modifying and accessing content of an end-to-end encrypted folder
 In general, clients need to perform two steps to modify the content of an end-to-end encrypted folder.
@@ -446,11 +447,11 @@ To create a share the following actions have to be performed:
 
 1. The file has to be shared via the [OCS](https://docs.nextcloud.com/server/13/developer_manual/core/ocs-share-api.html) sharing API to the recipient
 2. Generate a new metadata key
-3. The recipient is added to the recipients array with
+3. The recipient is added to the users array with
   - userId
   - certificate
-4. Add/replace the new metadata-key of every recipient in the recipients-list. 
-   The metadata-key is encrypted with the recipient's public key.
+4. Add/replace the new metadata-key of every user in the users-list. 
+   The metadata-key is encrypted with the user's public key.
 5. The SHA-256 hash of the metadata-key is added to the keyChecksum array.
 
 #### Remove someone from an existing share
@@ -458,9 +459,9 @@ To remove someone from an existing share the following actions have to be perfor
 
 1. The file has to be unshared via the [OCS](https://docs.nextcloud.com/server/13/developer_manual/core/ocs-share-api.html) sharing API to the recipient
 2. A new metadata-key must be generated
-3. The recipient is removed from the recipients array
-4. Add/replace the new metadata-key to every recipient in the recipients-list. 
-   The metadata-key is encrypted with the recipient's public key.
+3. The recipient is removed from the users array
+4. Add/replace the new metadata-key to every user in the users-list. 
+   The metadata-key is encrypted with the user's public key.
 5. The SHA-256 hash of metadata key is added to keyChecksum array.
 
 ### Edge cases
@@ -520,13 +521,13 @@ To implement CRLs the clients would always check if a key was revoked before the
 Given a share with User A, B and C.
 User C is removed by User A at a later time.
 User C now tries to gain access to the share again by first adding itself via Nextcloud share API.
-User C adds itself to recipients array of metadata file again.
+User C adds itself to users array of metadata file again.
 User A/B can now detect the malicious attack as the hash of the latest metadata is not in keyChecksums.
 
 #### User with valid certificate tries to add himself
 In this scenario the attacker is a valid user of the Nextcloud instance and therefore has a certificate issued by the Nextcloud server or trusted CA.
 Main idea of the attack:
-- Attacker adds himself to the recipients list and waits until a new metadata key is used.
+- Attacker adds himself to the users list and waits until a new metadata key is used.
 - The new metadata-key will be encrypted with the public key of the attacker
 
 This attack is prohibited by the signature on the metadata file and the metadata key.
