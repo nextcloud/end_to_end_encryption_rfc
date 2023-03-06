@@ -89,6 +89,7 @@ Since the data is not accessible to the server and to simplify the implementatio
 * Sharing to groups
 * Sharing at the level of individual files
 * Sharing of subfolders of an encrypted folder. It is only possible to share topmost encrypted folder
+* Filedrop: due to implementation there can no be sanity check if filedrop could have been modified (deleting files on server). Thus it is acceptable that an attacker can remove files and filedrop array, so that users will not have uploaded files. As atatcker cannot decrypt those files, this "data loss" is acceptable.
 
 ## Security goals
 ### Attacker model
@@ -208,6 +209,8 @@ In case the central data recovery key is enabled the metadata will also be encry
 
 The only unencrypted elements in the JSON document is the version of the metadata file. The other information are all encrypted either based on the public key or the actual metadata keys. The encrypted JSON array elements should just be encrypted as simple string element. This means that  “foo => [bar, foo]” should become “foo => “ciphertext” and the clients are responsible for decoding this ciphertext in a proper array again.
 
+Filedrop 
+
 ```
 {
   "metadata": {
@@ -216,15 +219,20 @@ The only unencrypted elements in the JSON document is the version of the metadat
     "nonce": "123",
     "authenticationTag": "123"
   }
-  "users": [ 
+  "users": [
      // The following contains the reference to all users who have access to the share, including owner.
      // A newly created folder thus will also have this array with the owner as its first entry.
      // The metadata-key is encrypted with RSA/ECB/OAEPWithSHA-256AndMGF1Padding
     { 
       "userId": "testUser"
       "certificate": "public key of this user",
-      "encryptedMetadataKey": "encrypted metadata-key then base64"
+      "encryptedMetadataKey": "encrypted metadata-key then base64",
+      "encryptedFiledropKey": "encrypted filedrop-key then base64",
     }
+  ],
+  "filedrop": [
+      "ciphertext": "encrypted metadata (AES/GCM/NoPadding, 128 bit key size) of folder (see below for the plaintext structure).
+                first gzipped, then encrypted, then base64 encoded.",
   ],
   "version": 2, 
 }
@@ -254,6 +262,21 @@ Metadata:
   ]
 }
 ```
+Filedrop:
+```
+[
+   "<uid>": {
+   // Unencrypted file name
+   "filename": "test.txt",
+   // Mimetype. If unknown, use "application/octet-stream"
+   "mimetype": "plain/text",
+   // Encryption algorithm: RSA/ECB/OAEPWithSHA-256AndMGF1Padding algo
+   "nonce": ""
+   "authenticationTag": ""
+   "key": "jtboLmgGR1OQf2uneqCVHpklQLlIwWL5TXAQ0keK"
+   }
+]
+```
 
 When creating a new folder, an initial metadata file needs to be created with following values
 - counter starts with 0
@@ -274,6 +297,23 @@ To lock the metadata a POST request to `/ocs/v2.php/apps/end_to_end_encryption/a
 To update the metadata a PUT request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/meta-data/<file-id>` has to be sent. Whereas `<file-id>` has to be the file ID indicated by our WebDAV API. As parameters “token”, which contains the current lock token, and “metadata”, containing the encrypted metadata have to be sent.
 
 To unlock the metadata a DELETE request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/lock/<file-id>` has to be sent. Whereas `<file-id>` has to be the file ID indicated by our WebDAV API. The previously received lock token has to be sent as `token` parameter.
+
+
+##### Migrating filedrop
+Files added via secure file drop are added to filedrop array via web browser.
+The filedrop-key, similar to metadata-key, is then encrypted to all users of this folder, so that all users that have access can migrate.
+
+As soon as a client downloads metadata file and finds a non-empty filedrop array, they shall do
+1. lock folder
+2. move each file from filedrop array to files array
+3. empty filedrop array
+4. upload updated metadata file
+5. unlock folder
+
+This needs to be done even when there is no actual change on other files, so e.g. when listing files, refreshing folders, etc.
+Reason is that filedrop array is not protected via any mechanism and thus an attacker could remove array and payload and thus no user knows about this uploaded file.
+The attacker cannot decrypt it, as they do not have access to filedrop key.
+Thus it is best to keep time for existing filedrop as little as possible.
 
 ### Signing the metadata
 Signature: CMS signed data, according to RFC5652
