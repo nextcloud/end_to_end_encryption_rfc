@@ -233,6 +233,8 @@ Filedrop
   "filedrop": [
       "ciphertext": "encrypted metadata (AES/GCM/NoPadding, 128 bit key size) of folder (see below for the plaintext structure).
                 first gzipped, then encrypted, then base64 encoded.",
+      "nonce": "123",
+      "authenticationTag": "123"
   ],
   "version": 2, 
 }
