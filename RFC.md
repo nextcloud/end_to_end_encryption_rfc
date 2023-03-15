@@ -234,7 +234,15 @@ Filedrop
       "ciphertext": "encrypted metadata (AES/GCM/NoPadding, 128 bit key size) of folder (see below for the plaintext structure).
                 first gzipped, then encrypted, then base64 encoded.",
       "nonce": "123",
-      "authenticationTag": "123"
+      "authenticationTag": "123",
+      "users": [
+        // The following contains the reference to all users who have access to filedrop.
+        // The metadata-key is encrypted with RSA/ECB/OAEPWithSHA-256AndMGF1Padding
+       { 
+         "userId": "testUser"
+         "encryptedFiledropKey": "encrypted filedrop-key then base64",
+       }
+     ],
   ],
   "version": 2, 
 }
@@ -246,11 +254,11 @@ Metadata:
   "keyChecksums": [ "list of hashes of metadata-keys" ],
   "deleted": "true/false",
   "counter": 12,
-  "folders": [
+  "folders": {
     "<uid>": "cleartext name", 
     "<uid>": "cleartext name 2"
-  ],
-  "files": [ 
+  },
+  "files": { 
      "<uid>": {
         // Unencrypted file name
         "filename": "test.txt",
@@ -261,12 +269,12 @@ Metadata:
         "authenticationTag": ""
         "key": "jtboLmgGR1OQf2uneqCVHpklQLlIwWL5TXAQ0keK"
       }
-  ]
+  }
 }
 ```
 Filedrop:
 ```
-[
+{
    "<uid>": {
    // Unencrypted file name
    "filename": "test.txt",
@@ -277,7 +285,7 @@ Filedrop:
    "authenticationTag": ""
    "key": "jtboLmgGR1OQf2uneqCVHpklQLlIwWL5TXAQ0keK"
    }
-]
+}
 ```
 
 When creating a new folder, an initial metadata file needs to be created with following values
@@ -321,7 +329,7 @@ Thus it is best to keep time for existing filedrop as little as possible.
 Signature: CMS signed data, according to RFC5652
 - certificate of user
 - Signed data:
-    - create byte array of JSON binary and decrypted metadata key
+    - create byte array of JSON binary without filedrop part and decrypted metadata key
     - SignerIdentifier of the CMS container contains userId of the user who created the signature
 
 The encoded binary CMS structure is base64-encoded and sent in the header of the metadata request.
