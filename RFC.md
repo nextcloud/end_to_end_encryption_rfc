@@ -215,7 +215,7 @@ Filedrop
 {
   "metadata": {
     "ciphertext": "encrypted metadata (AES/GCM/NoPadding, 128 bit key size) of folder (see below for the plaintext structure).
-                first gzipped, then encrypted, then base64 encoded.",
+                first gzipped, then encrypted, then base64 encoded.", MAKE SURE to always encrypt it using the BINARY representation (NOT base64) of "encryptedMetadataKey" from the "users" array below
     "nonce": "123",
     "authenticationTag": "123"
   }
@@ -226,7 +226,7 @@ Filedrop
     { 
       "userId": "testUser"
       "certificate": "public key of this user",
-      "encryptedMetadataKey": "encrypted metadata-key then base64",
+      "encryptedMetadataKey": "encrypted metadata-key then base64, but, ALWAYS used in NON-base64 format when encrypting data with it)",
       "encryptedFiledropKey": "encrypted filedrop-key then base64",
     }
   ],
@@ -329,11 +329,13 @@ Thus it is best to keep time for existing filedrop as little as possible.
 Signature: CMS signed data, according to RFC5652
 - certificate of user
 - Signed data:
-    - create byte array of JSON binary without filedrop part and decrypted metadata key
+    - create byte array of JSON in a compact format (without spaces and newlines except in key names) without filedrop part and decrypted metadata key and then base64 encoded prior to generating a signature
     - SignerIdentifier of the CMS container contains userId of the user who created the signature
 
 The encoded binary CMS structure is base64-encoded and sent in the header of the metadata request.
 The Section [Uploading payload and metadata](#uploading-payload-and-metadata-file-step-5--8) further describes how the signature is handled.
+***A CMS Signature MUST be always generated with detached mode (the metadata is not included in the signature as it is already stored on the server and is always retrieved with a GET request***
+***A metadata for a CMS Signature MUST be prepared as described at the beginning of this section (without spaces and newlines and also base64 encoded when passing it to signature generation API***
 
 ### Verifying the metadata
 Before using the metadata file, e.g. on a folder refresh the client has to verify the signature.
