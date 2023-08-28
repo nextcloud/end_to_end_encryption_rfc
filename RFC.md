@@ -226,8 +226,7 @@ Filedrop
     { 
       "userId": "testUser"
       "certificate": "public key of this user",
-      "encryptedMetadataKey": "encrypted metadata-key then base64, but, ALWAYS used in NON-base64 format when encrypting data with it)",
-      "encryptedFiledropKey": "encrypted filedrop-key then base64",
+      "encryptedMetadataKey": "encrypted metadata-key then base64, but, ALWAYS used in NON-base64 format when encrypting data with it)"
     }
   ],
   "filedrop": [
