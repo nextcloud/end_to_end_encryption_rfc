@@ -229,20 +229,36 @@ Filedrop
       "encryptedMetadataKey": "encrypted metadata-key then base64, but, ALWAYS used in NON-base64 format when encrypting data with it)"
     }
   ],
-  "filedrop": [
-      "ciphertext": "encrypted metadata (AES/GCM/NoPadding, 128 bit key size) of folder (see below for the plaintext structure).
-                first gzipped, then encrypted, then base64 encoded.",
-      "nonce": "123",
-      "authenticationTag": "123",
-      "users": [
-        // The following contains the reference to all users who have access to filedrop.
-        // The metadata-key is encrypted with RSA/ECB/OAEPWithSHA-256AndMGF1Padding
-       { 
-         "userId": "testUser"
-         "encryptedFiledropKey": "encrypted filedrop-key then base64",
-       }
-     ],
-  ],
+  "filedrop": {
+      "<uid>": {
+         "ciphertext": "encrypted metadata (AES/GCM/NoPadding, 128 bit key size) of folder (see below for the plaintext structure).
+                   first gzipped, then encrypted, then base64 encoded.",
+         "nonce": "123",
+         "authenticationTag": "123",
+         "users": [
+              // The following contains the reference to all users who have access to filedrop.
+              // The metadata-key is encrypted with RSA/ECB/OAEPWithSHA-256AndMGF1Padding
+             { 
+               "userId": "testUser"
+               "encryptedFiledropKey": "encrypted filedrop-key then base64",
+             }
+         ],
+      },
+      <uid>": {
+         "ciphertext": "encrypted metadata (AES/GCM/NoPadding, 128 bit key size) of folder (see below for the plaintext structure).
+                   first gzipped, then encrypted, then base64 encoded.",
+         "nonce": "123",
+         "authenticationTag": "123",
+         "users": [
+              // The following contains the reference to all users who have access to filedrop.
+              // The metadata-key is encrypted with RSA/ECB/OAEPWithSHA-256AndMGF1Padding
+             { 
+               "userId": "testUser"
+               "encryptedFiledropKey": "encrypted filedrop-key then base64",
+             }
+         ],
+      }
+   }
   "version": "2.0", 
 }
 ```
@@ -274,7 +290,6 @@ Metadata:
 Filedrop:
 ```
 {
-   "<uid>": {
    // Unencrypted file name
    "filename": "test.txt",
    // Mimetype. If unknown, use "application/octet-stream"
@@ -283,7 +298,6 @@ Filedrop:
    "nonce": ""
    "authenticationTag": ""
    "key": "jtboLmgGR1OQf2uneqCVHpklQLlIwWL5TXAQ0keK"
-   }
 }
 ```
 
