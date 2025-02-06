@@ -192,6 +192,9 @@ This is done the following way:
 5. Client stores the private key in the keychain of the device.
 6. The mnemonic is stored in the keychain of the device (ideally with spaces so it can be shown more readable).
 
+A client detecting a certificate that has not been issued by the server public key and that has no support for secure USB token or is not finding the certificate on such a valid USB secure token should disable end-to-end encryption.
+In case certificate are stored on secure USB token and generated outside the Nextcloud server app, not falling back to less secure software stored certificate should not be permitted.
+
 ### Creating an end-to-end encrypted folder
 To create an end-to-end encrypted folders multiple steps have to be performed.
 First of all, data access to such folders happens via our regular WebDAV API available at `/remote.php/dav/$userId/files`.
@@ -534,7 +537,9 @@ If the file exists locally but not on the file system the client should re-uploa
 As a PKI approach for encryption is used, every certificate is issued by a central root authority.
 By default, the Nextcloud server acts as a root authority and issues the certificates from the CSRs.
 
-The clients do the following when trying to establish a trust relationship to another user:
+Alternatively, the certificates may be entirely managed by an external certificate authority (CA). In such cases, the workflow has to be different.
+
+The clients do the following when trying to establish a trust relationship to another user when certificates are generated directly by the end_to_end_encryption Nextcloud app:
 
 1. Check if a certificate for the specified user ID is already downloaded (Trust On First Use (TOFU))
    1. If a certificate is available, it will be used
@@ -543,6 +548,21 @@ The clients do the following when trying to establish a trust relationship to an
 3. If the user has not yet set up E2E and thus no public key, it will not be possible to share with the user. 
    A warning should then be shown.
 4. Verify that the certificate is issued by the downloaded server public key.
+   1. If yes: Use this one.
+   2. If no: Show a warning that initiating an encrypted share is not possible to the user.
+5. Store the user certificate locally for next operations
+
+If certificates are externally managed, the workflow will differ:
+
+1. Check if a certificate for the specified user ID is already downloaded (Trust On First Use (TOFU))
+   1. If a certificate is available, it is verified to still be valid.
+      1. It is valid, it will be used.
+      2. It is no longer valid, the client will continue at 2.
+   2. If none is available, the client will continue at 2.
+2. Query the user certificate by sending GET request to the `/ocs/v2.php/apps/end_to_end_encryption/api/v1/public-key` endpoint and sending a JSON encoded `users` parameter containing the specified UIDs
+3. If the user has not yet set up E2E and thus no public key, it will not be possible to share with the user.
+   A warning should then be shown.
+4. Verify that the certificate is valid.
    1. If yes: Use this one.
    2. If no: Show a warning that initiating an encrypted share is not possible to the user.
 5. Store the user certificate locally for next operations
