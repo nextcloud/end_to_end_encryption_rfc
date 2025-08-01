@@ -186,7 +186,7 @@ In case a certificate already exists for the user the client has to download the
 This is done the following way:
 
 1. Client downloads private key from the `/ocs/v2.php/apps/end_to_end_encryption/api/v1/private-key` endpoint.
-2. Client asks the user for the mnemonic and decrypts the private key using AES/GCM/NoPadding as cipher (256 bit key size) and PBKDF2WithHmacSHA1 as key derivation. 
+2. Client asks the user for the mnemonic and decrypts the private key using AES/GCM/NoPadding as cipher (256 bit key size) and PBKDF2WithHmacSHA256 as key derivation with 600000 iterations.
 3. Client checks if private key belongs to previously downloaded public certificate.
 4. Client checks if their certificate was signed by the server (checking the servers public key from /ocs/v2.php/apps/end\_to\_end\_encryption/api/v1/server-key)
 5. Client stores the private key in the keychain of the device.
