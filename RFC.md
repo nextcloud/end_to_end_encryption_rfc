@@ -404,11 +404,16 @@ The attacker cannot decrypt it, as they do not have access to filedrop key.
 Thus it is best to keep time for existing filedrop as little as possible.
 
 ### Signing the metadata
-Signature: CMS signed data, according to RFC5652
+Signature: Cryptographic Message Syntax (CMS) signed data, according to [RFC 5652](https://datatracker.ietf.org/doc/html/rfc5652)
 - certificate of user
 - Signed data:
-    - create byte array of JSON in a compact format (without spaces and newlines except in key names) without filedrop part and decrypted metadata key and then base64 encoded prior to generating a signature
-    - SignerIdentifier of the CMS container contains userId of the user who created the signature
+   - Create metadata JSON in a compact format
+      - Remove the filedrop part
+      - Stringified without spaces and newlines (except in keys or values)
+      - Object keys are sorted alphabetically
+   - Encode the JSON string with Base64 prior signing
+   - SignerIdentifier of the CMS container contains userId of the user who created the signature
+   - Must include the signed attributes described in [RFC 6488](https://www.rfc-editor.org/rfc/rfc6488.html)
 
 The encoded binary CMS structure is base64-encoded and sent in the header of the metadata request.
 The Section [Uploading payload and metadata](#uploading-payload-and-metadata-file-step-5--8) further describes how the signature is handled.
