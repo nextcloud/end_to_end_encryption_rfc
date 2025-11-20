@@ -128,14 +128,27 @@ The following steps will walk through the technical implementation of the encryp
 * users-array: array of information of users. Used to list all users of a shared and encrypted folder, with their certificate and the encrypted metadata key
 * metadata-key: key used to encrypt the metadata of the folder
 * metadata: metadata of all files (file-metadata) and sub-folders in the encrypted folder, list of checksums of metadata-keys and a counter
+* PEM: Textual encoding of certificate and key structures according to [RFC 7468](https://datatracker.ietf.org/doc/html/rfc7468)
+
+### API endpoints
+This RFC makes use of two different APIs:
+1. The [Nextcloud WebDAV](https://docs.nextcloud.com/server/latest/developer_manual/client_apis/WebDAV/index.html) API
+2. The `end_to_end_encryption` [OCS](https://www.open-collaboration-services.org/) API
+
+When an OCS API endpoint is mentioned then this RFC uses the `v2` endpoint of OCS provided by Nextcloud.
+So that all OCS requests share the same base URL:
+
+- `/ocs/v2.php/apps/end_to_end_encryption/api/v{VERSION}`
+
+Where `{VERSION}` is the major version of the current metadata version.
 
 ### Adding an end-to-end encrypted device
 When requesting the server certificate and when adding a new device of a user, we assume that the server is trusted (TOFU).
 As a first step, a device has to be added to an account.
 Depending on whether an end-to-end encrypted device already has been added to an account, the device will have to create new key material or use existing key material.
 
-To check whether a certificate has already been issued or not the `/ocs/v2.php/apps/end_to_end_encryption/api/v1/public-key` endpoint should be used. 
-In addition, the client has to download the server’s public certificate from `/ocs/v2.php/apps/end_to_end_encryption/api/v1/server-key` and use this to verify the certificate chain in all future operations.
+To check whether a certificate has already been issued or not the `/public-key` OCS endpoint should be used. 
+In addition, the client has to download the server’s public key from the `/server-key` OCS endpoint and use this to verify the certificate chain in all future operations.
 
 Alternatively, an external certificate authority may be used with certificates being generated and their life time tracked outside of the end_to_end_encryption Nextcloud app. That would be the case if certificates (and their associated key-pair) are stored on dedicated USB tokens.
 
@@ -177,31 +190,31 @@ Displaying the mnemonic requires the user to enter their PIN/fingerprint again o
 When a device is initially added to an account the device will have to upload relevant key material for the user account on the server:
 
 1. Client will discover on secure storage the proper certificate (and key pair) to use
-2. Client uploads their certificate to the server `/ocs/v2.php/apps/end_to_end_encryption/api/v1/public-key`
-3. Client may check the certificate of the server `/ocs/v2.php/apps/end_to_end_encryption/api/v1/server-key`
+2. Client uploads their certificate to the server using the OCS `POST` endpoint `/public-key`
+3. Client may check the certificate of the server by using `GET` on the `/server-key` OCS endpoint.
 4. Client stores the certificate ID and enables end-to-end encryption feature on the client.
 
 #### Further devices
 In case a certificate already exists for the user the client has to download the existing private key. 
 This is done the following way:
 
-1. Client downloads private key from the `/ocs/v2.php/apps/end_to_end_encryption/api/v1/private-key` endpoint.
-2. Client asks the user for the mnemonic and decrypts the private key using AES/GCM/NoPadding as cipher (256 bit key size) and PBKDF2WithHmacSHA256 as key derivation with 600.000 iterations. Alternatively the client should use the former algorithm and parameters in case the private key was uploaded with an older RFC version. A client must try the following settings:
-  1. PBKDF2WithHmacSHA1 as key derivation with 1.000 iterations
-  2. PBKDF2WithHmacSHA1 as key derivation with 600.000 iterations
-  3. PBKDF2WithHmacSHA256 as key derivation with 600.000 iterations
+1. Client downloads private key from the `/private-key` endpoint.
+2. Client asks the user for the mnemonic and decrypts the private key using AES/GCM/NoPadding as cipher (256 bit key size) and PBKDF2WithHmacSHA256 as key derivation with 600000 iterations. Alternatively the client should use the former algorithm and parameters in case the private key was uploaded with an older RFC version. A client must try the following settings:
+  1. PBKDF2WithHmacSHA1 as key derivation with 1000 iterations
+  2. PBKDF2WithHmacSHA1 as key derivation with 600000 iterations
+  3. PBKDF2WithHmacSHA256 as key derivation with 600000 iterations
 3. Client checks if private key belongs to previously downloaded public certificate.
-4. Client checks if their certificate was signed by the server (checking the servers public key from /ocs/v2.php/apps/end\_to\_end\_encryption/api/v1/server-key)
+4. Client checks if their certificate was signed by the server (checking the servers public key from the OCS `/server-key` endpoint)
 5. Client stores the private key in the keychain of the device.
 6. The mnemonic is stored in the keychain of the device (ideally with spaces so it can be shown more readable).
 
 ### Creating an end-to-end encrypted folder
 To create an end-to-end encrypted folders multiple steps have to be performed.
-First of all, data access to such folders happens via our regular WebDAV API available at `/remote.php/dav/$userId/files`.
+First of all, data access to such folders happens via our regular WebDAV API available at `/remote.php/dav/{userId}/files`.
 
 #### Mark folder as end-to-end encrypted
 After creating a folder via WebDAV the folder has to be flagged as end-to-end encrypted.
-This can be performed by sending a PUT request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/encrypted/<folder-id>` where `<folder-id>` has to be the folder ID indicated by our WebDAV API.
+This can be performed by sending a `PUT` request to the `/encrypted/<folder-id>` OCS endpoint where `<folder-id>` has to be the folder ID indicated by our WebDAV API.
 
 Once this flag has been set the folder will not be accessible anymore via web and also not displayed to regular WebDAV clients.
 Only empty folders can be marked as end-to-end encrypted.
@@ -542,7 +555,7 @@ The clients do the following when trying to establish a trust relationship to an
 1. Check if a certificate for the specified user ID is already downloaded (Trust On First Use (TOFU))
    1. If a certificate is available, it will be used
    2. If none is available, the client will continue at 2.
-2. Query the user certificate by sending GET request to the `/ocs/v2.php/apps/end_to_end_encryption/api/v1/public-key` endpoint and sending a JSON encoded `users` parameter containing the specified UIDs
+2. Query the user certificate by sending GET request to the `/public-key` endpoint and sending a JSON encoded `users` parameter containing the specified UIDs
 3. If the user has not yet set up E2E and thus no public key, it will not be possible to share with the user. 
    A warning should then be shown.
 4. Verify that the certificate is issued by the downloaded server public key.
@@ -553,7 +566,7 @@ The clients do the following when trying to establish a trust relationship to an
 #### Add someone to an end-to-end encrypted folder
 To create a share the following actions have to be performed:
 
-1. The file has to be shared via the [OCS](https://docs.nextcloud.com/server/13/developer_manual/core/ocs-share-api.html) sharing API to the recipient
+1. The file has to be shared via the [OCS sharing](https://docs.nextcloud.com/server/latest/developer_manual/client_apis/OCS/ocs-share-api.html) API to the recipient
 2. Generate a new metadata key
 3. The recipient is added to the users array with
   - userId
@@ -565,7 +578,7 @@ To create a share the following actions have to be performed:
 #### Remove someone from an existing share
 To remove someone from an existing share the following actions have to be performed:
 
-1. The file has to be unshared via the [OCS](https://docs.nextcloud.com/server/13/developer_manual/core/ocs-share-api.html) sharing API to the recipient
+1. The file has to be unshared via the [OCS sharing](https://docs.nextcloud.com/server/latest/developer_manual/client_apis/OCS/ocs-share-api.html) API to the recipient
 2. A new metadata-key must be generated
 3. The recipient is removed from the users array
 4. Add/replace the new metadata-key to every user in the users-list. 
