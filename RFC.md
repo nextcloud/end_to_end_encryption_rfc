@@ -1,5 +1,39 @@
 # Nextcloud end-to-end encryption
 
+## Table of contents
+
+* [Introduction](#introduction)
+* [Protocol design goals](#protocol-design-goals)
+  * [Usage of widely available and tested libraries for crypto primitives](#usage-of-widely-available-and-tested-libraries-for-crypto-primitives)
+  * [Sharing functionality](#sharing-functionality)
+  * [Optional central data recovery](#optional-central-data-recovery)
+  * [Simple multi-device management](#simple-multi-device-management)
+  * [Simple authenticated key exchange](#simple-authenticated-key-exchange)
+  * [Support for HSM](#support-for-hsm)
+  * [Versioning](#versioning)
+* [Accepted feature loss](#accepted-feature-loss)
+* [Security goals](#security-goals)
+  * [Attacker model](#attacker-model)
+  * [Goals](#goals)
+* [Technical implementation](#technical-implementation)
+  * [Terminology](#terminology)
+  * [API endpoints](#api-endpoints)
+  * [Adding an end-to-end encrypted device](#adding-an-end-to-end-encrypted-device)
+  * [Creating an end-to-end encrypted folder](#creating-an-end-to-end-encrypted-folder)
+  * [Signing the metadata](#signing-the-metadata)
+  * [Verifying the metadata](#verifying-the-metadata)
+  * [Modifying and accessing content of an end-to-end encrypted folder](#modifying-and-accessing-content-of-an-end-to-end-encrypted-folder)
+  * [Edge cases](#edge-cases)
+* [Possible extensions](#possible-extensions)
+  * [Manual key verification](#manual-key-verification)
+  * [Hardware security module (HSM)](#hardware-security-module-hsm)
+* [Implementation details](#implementation-details)
+  * [Private key](#private-key)
+  * [AES+GCM](#aesgcm)
+* [Scenarios](#scenarios)
+  * [Regular operations](#regular-operations)
+  * [Attack scenarios](#attack-scenarios)
+
 ## Introduction
 With the announcement of the Nextcloud end-to-end encryption techpreview, we would like to invite you to scrutinize our source code and cryptographic approach.
 
