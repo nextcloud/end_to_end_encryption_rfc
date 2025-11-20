@@ -344,19 +344,29 @@ When creating a new folder, an initial metadata file needs to be created with fo
 - if folder is topmost encrypted folder, the users array contains the current user with userId, certificate and encrypted metadata key
 - if folder is a subfolder of an encrypted folder, the users-array is not included
 
-The metadata has to be created by sending a POST request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/meta-data/<folder-id>`, where `<folder-id>` has to be the folder ID indicated by our WebDAV API.
-The POST parameter `metaData` with the encrypted metadata has to be used.
+The metadata has to be created by sending a `POST` request to the `/meta-data/<folder-id>` OCS API endpoint, where `<folder-id>` has to be the folder ID indicated by our WebDAV API.
+The `POST` parameter `metaData` with the encrypted metadata has to be used.
+And the `X-NC-E2EE-SIGNATURE` header with the metadata signature has to be included in the request (see below for how to generate).
 
 #### Update metadata file
 To keep the metadata and the file in sync locking is required. The client needs to lock the encrypted folder. If the lock operation succeeded the server will return a successful response together with a token in the response body. In case of a lost connection the client can restart the operation later with another "lock" request, in this case the client should send the token with the new lock call. This enables the server to decide if the client is allowed to retry the upload.
 
 After locking was successful, the client will upload the encrypted file and afterwards the metadata file. If both files are uploaded successfully, the client will finish the operation by sending an unlock request.
 
-To lock the metadata a POST request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/lock/<file-id>` has to be sent. Whereas `<file-id>` has to be the file ID indicated by our WebDAV API. To add an existing lock token it can be sent as `token` parameter.
+To lock the metadata a `POST` request to the `/lock/<file-id>` endpoint has to be sent.
+Where `<file-id>` has to be the file ID indicated by our WebDAV API.
+To add an existing lock token it can be sent as `e2e-token` parameter.
+The request will return a JSON object with the `e2e-token` key containing the lock token.
 
-To update the metadata a PUT request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/meta-data/<file-id>` has to be sent. Whereas `<file-id>` has to be the file ID indicated by our WebDAV API. As parameters “token”, which contains the current lock token, and “metadata”, containing the encrypted metadata have to be sent.
+To update the metadata a `PUT` request to `/meta-data/<file-id>` has to be sent.
+- Where `<file-id>` has to be the file ID indicated by our WebDAV API.
+- The encrypted metadata must be sent as the URL encoded `metaData` parameter.
+- The lock token obtained in from the lock endpoint has to be used as the `e2e-token` HTTP header.
+- The metadata signature has to be provided as the `X-NC-E2EE-SIGNATURE` HTTP header.
 
-To unlock the metadata a DELETE request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/lock/<file-id>` has to be sent. Whereas `<file-id>` has to be the file ID indicated by our WebDAV API. The previously received lock token has to be sent as `token` parameter.
+To unlock the metadata a DELETE request to `/lock/<file-id>` has to be sent.
+Where `<file-id>` has to be the file ID indicated by our WebDAV API.
+The previously received lock token has to be sent as `e2e-token` HTTP header.
 
 #### Updating an user certificate
 
@@ -506,17 +516,16 @@ After both files are uploaded successfully the client will finish the operation 
 
 The `<folder-id>` denotes the ID of the end-to-end encrypted folder given by the WebDAV API.
 
-To lock the folder a POST request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/lock/<folder-id>` has to be sent with the incremented counter as header X-NC-E2EE-COUNTER.
-To use an existing lock token it can be sent as `token` parameter.
+To lock the folder a `POST` request to the `/lock/<folder-id>` endpoint has to be sent with the incremented counter as header `X-NC-E2EE-COUNTER`.
+To use an existing lock token it can be sent as `e2e-token` HTTP header.
 
-To update the metadata a PUT request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/meta-data/<folder-id>` has to be sent.
-The computed signature needs to be sent as header X-NC-E2EE-SIGNATURE.
-The request requires following two parameters:
-* The `token` contains the current lock token
-* The `metadata` contains the encrypted metadata JSON.
+To update the metadata a `PUT` request to the `/meta-data/<folder-id>` endpoint has to be sent.
+- The computed signature needs to be sent as header `X-NC-E2EE-SIGNATURE`.
+- The current lock token has to be included as `e2e-token` header.
+- The encrypted metadata JSON has to be sent as the URL encoded `metaData` parameter.
 
-To unlock the folder a DELETE request to `/ocs/v2.php/apps/end_to_end_encryption/api/v1/lock/<folder-id>` has to be sent.
-The previously received lock token has to be sent as `token` parameter.
+To unlock the folder a DELETE request to `/lock/<folder-id>` has to be sent.
+The previously received lock token has to be sent as `e2e-token` header.
 If this fails, the client has to make sure that it retries or revert the upload so that the folder is then again in an unlocked and consistent state.
 
 
