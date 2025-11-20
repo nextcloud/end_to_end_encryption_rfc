@@ -240,96 +240,100 @@ Note that comments are not available in standalone JSON and only used here for b
 
 In case the central data recovery key is enabled the metadata will also be encrypted towards the servers central data recovery key. Clients must show a prominent warning to the users for such scenarios.
 
-The only unencrypted elements in the JSON document is the version of the metadata file. The other information are all encrypted either based on the public key or the actual metadata keys. The encrypted JSON array elements should just be encrypted as simple string element. This means that  “foo => [bar, foo]” should become “foo => “ciphertext” and the clients are responsible for decoding this ciphertext in a proper array again.
+The JSON document contains at least 3 keys and at most 4 keys:
+- `metadata`: The value is the the encrypted inner metadata
+- `users`: The list of users with access to the folder
+- `version`: The metadata version
+- `filedrop`: (optional) file drop encrypted files
 
-Filedrop 
-
-```
+```json
 {
-  "metadata": {
-    "ciphertext": "encrypted metadata (AES/GCM/NoPadding, 128 bit key size) of folder (see below for the plaintext structure).
-                first gzipped, then encrypted, then base64 encoded.", MAKE SURE to always encrypt it using the BINARY representation (NOT base64) of "encryptedMetadataKey" from the "users" array below
-    "nonce": "123",
-    "authenticationTag": "123"
-  }
-  "users": [
-     // The following contains the reference to all users who have access to the share, including owner.
-     // A newly created folder thus will also have this array with the owner as its first entry.
-     // The metadata-key is encrypted with RSA/ECB/OAEPWithSHA-256AndMGF1Padding
-    { 
-      "userId": "testUser"
-      "certificate": "public key of this user",
-      "encryptedMetadataKey": "encrypted metadata-key then base64, but, ALWAYS used in NON-base64 format when encrypting data with it)"
-    }
-  ],
-  "filedrop": {
+   "metadata": {
+      // The "ciphertext" key contains the encrypted metadata of the folder,
+      // see "Metadata" example below for the plaintext structure.
+      // It is encrypted using AES/GCM/NoPadding with 128 bit key size.
+      // 1. The inner JSON document is stringified
+      // 2. Then gzipped
+      // 3. Then encrypted
+      //    MAKE SURE to always encrypt it using the BINARY representation (NOT base64)
+      //    of "encryptedMetadataKey" from the "users" array below).
+      // 4. Then Base64 encoded
+      "ciphertext": "encrypted metadata",
+      "nonce": "123",
+      "authenticationTag": "123"
+   }
+   "users": [
+      // The following contains the reference to all users who have access to the share, including owner.
+      // A newly created folder thus will also have this array with the owner as its first entry.
+      // The metadata-key is encrypted with RSA/ECB/OAEPWithSHA-256AndMGF1Padding
+      { 
+         "userId": "testUser",
+         "certificate": "public key of this user",
+         "encryptedMetadataKey": "encrypted metadata-key then base64, but, ALWAYS used in NON-base64 format when encrypting data with it)"
+      }
+   ],
+   "filedrop": {
       "<uid>": {
-         "ciphertext": "encrypted metadata (AES/GCM/NoPadding, 128 bit key size) of folder (see below for the plaintext structure).
-                   first gzipped, then encrypted, then base64 encoded.",
+         // The "ciphertext" key contains the encrypted metadata for the file
+         // see "Filedrop" example below for the plaintext structure.
+         // It is encrypted using AES/GCM/NoPadding with 128 bit key size.
+         // 1. The inner JSON document is stringified
+         // 2. Then gzipped
+         // 3. Then encrypted
+         // 4. Then Base64 encoded
+         "ciphertext": "encrypted metadata",
          "nonce": "123",
          "authenticationTag": "123",
          "users": [
               // The following contains the reference to all users who have access to filedrop.
               // The metadata-key is encrypted with RSA/ECB/OAEPWithSHA-256AndMGF1Padding
              { 
-               "userId": "testUser"
+               "userId": "testUser",
                "encryptedFiledropKey": "encrypted filedrop-key then base64",
              }
          ],
       },
-      <uid>": {
-         "ciphertext": "encrypted metadata (AES/GCM/NoPadding, 128 bit key size) of folder (see below for the plaintext structure).
-                   first gzipped, then encrypted, then base64 encoded.",
-         "nonce": "123",
-         "authenticationTag": "123",
-         "users": [
-              // The following contains the reference to all users who have access to filedrop.
-              // The metadata-key is encrypted with RSA/ECB/OAEPWithSHA-256AndMGF1Padding
-             { 
-               "userId": "testUser"
-               "encryptedFiledropKey": "encrypted filedrop-key then base64",
-             }
-         ],
-      }
-   }
-  "version": "2.0", 
+      // ...
+   },
+   "version": "2.0", 
 }
 ```
 
 Metadata:
-```
+```json
 {
-  "keyChecksums": [ "list of hashes of metadata-keys" ],
-  "deleted": "true/false",
-  "counter": 12,
-  "folders": {
-    "<uid>": "cleartext name", 
-    "<uid>": "cleartext name 2"
-  },
-  "files": { 
-     "<uid>": {
-        // Unencrypted file name
-        "filename": "test.txt",
-        // Mimetype. If unknown, use "application/octet-stream"
-        "mimetype": "plain/text",
-        // Encryption algorithm: AES/GCM/NoPadding (128 bit key size)
-        "nonce": ""
-        "authenticationTag": ""
-        "key": "jtboLmgGR1OQf2uneqCVHpklQLlIwWL5TXAQ0keK"
+   "keyChecksums": [ "list of hashes of (unencrypted) metadata-keys" ], // this builds up a history of metadata keys
+   "deleted": "true/false",
+   "counter": 12,
+   "folders": {
+      "<uid>": "cleartext name", 
+      "<uid>": "cleartext name 2"
+   },
+   "files": { 
+      "<uid>": {
+         // Unencrypted file name
+         "filename": "test.txt",
+         // Mimetype. If unknown, use "application/octet-stream"
+         "mimetype": "plain/text",
+         // Encryption algorithm: AES/GCM/NoPadding (128 bit key size)
+         "nonce": "",
+         "authenticationTag": "",
+         "key": "jtboLmgGR1OQf2uneqCVHpklQLlIwWL5TXAQ0keK"
       }
-  }
+   }
 }
 ```
+
 Filedrop:
-```
+```json
 {
    // Unencrypted file name
    "filename": "test.txt",
    // Mimetype. If unknown, use "application/octet-stream"
    "mimetype": "plain/text",
    // Encryption algorithm: RSA/ECB/OAEPWithSHA-256AndMGF1Padding algo
-   "nonce": ""
-   "authenticationTag": ""
+   "nonce": "",
+   "authenticationTag": "",
    "key": "jtboLmgGR1OQf2uneqCVHpklQLlIwWL5TXAQ0keK"
 }
 ```
