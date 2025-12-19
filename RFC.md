@@ -121,6 +121,7 @@ Since the data is not accessible to the server and to simplify the implementatio
 * Sharing at the level of individual files
 * Sharing of subfolders of an encrypted folder. It is only possible to share topmost encrypted folder
 * Filedrop: due to implementation there can be no sanity check if filedrop could have been modified (deleting files on server). Thus it is acceptable that an attacker can remove files and filedrop array, so that users will not have uploaded files. As attackers cannot decrypt those files, this "data loss" is acceptable.
+* Scanning with files_antivirus. Metadata are also ignored by files_antivirus, even though they could be scanned, it adds too much latency.
 
 ## Security goals
 ### Attacker model
