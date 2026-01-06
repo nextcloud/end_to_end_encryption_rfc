@@ -640,6 +640,25 @@ To remove someone from an existing share the following actions have to be perfor
    The metadata-key is encrypted with the user's public key.
 5. The SHA-256 hash of metadata key is added to keyChecksum array.
 
+### Sharing to external users
+To share end-to-end encrypted files with users without a Nextcloud account,
+it is possible to create public shares with end-to-end encryption.
+For this the encrypted root folder has to be shared with Nextcloud sharing flow as a link share.
+Then a public- / private key pair has to be generated as described for the initial setup,
+with some changes:
+- For all API calls the `shareToken` parameter, with the value of the token of the created share,
+  has to be included in the requests.
+- The `CN` of the public certificate has to be set to `s:SHARE_TOKEN`,
+  where `SHARE_TOKEN` has to be replaced with the token of the share.
+
+This new "share user" has to be added just like a normal user to the metadata.
+To distinguish between public share users and normal users the user id can be checked for the `s:` prefix as the colon character is not allowed in normal user ids.
+
+The generated private key is encrypted as described for the initial setup with a new generated mnemonic,
+and will be stored on the server under the `s:SHARE_TOKEN` id.
+The client then should provide the new mnemonic to the sharing user which has to provide this information
+to the share recipient using a secure second channel.
+
 ### Edge cases
 #### Handling of complete key material loss
 Right now a complete key material loss means that other users that already had a share with the user will not be able to share new encrypted folders since the protocol uses TOFU for initiating shares.
