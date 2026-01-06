@@ -116,7 +116,6 @@ Since the data is not accessible to the server and to simplify the implementatio
 * Server-side versioning
 * Server-side search
 * Server-side previews
-* Access to folders via web interface
 * Sharing to groups
 * Sharing at the level of individual files
 * Sharing of subfolders of an encrypted folder. It is only possible to share topmost encrypted folder
