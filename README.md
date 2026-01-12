@@ -6,6 +6,8 @@ The current version can be found in [RFC.md](./RFC.md).
 
 ## History
 
+- v2.1
+  - Added support for end-to-end encrypted public shares
 - v2.0
   - Added file drop support
   - Metadata format changed
