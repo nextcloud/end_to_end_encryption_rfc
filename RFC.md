@@ -517,7 +517,7 @@ If any of the following steps fail, show a verbose warning to the user, unlock t
       1. Change filename in folders array, the encrypted subfolder remains unchanged
     * Delete subfolder:
       1. Remove the corresponding entry from the folders array
-      2. Issue a DELETE request to /ocs/v2.php/apps/end_to_end_encryption/api/v1/meta-data/<folder-id>
+      2. Issue a DELETE request to /ocs/v2.php/apps/end_to_end_encryption/api/v2/meta-data/<folder-id>
     * Move subfolder into another subfolder:
       1. Remove folder from folders array in metadata file of source folder and add it to metadata folders array in target folder
       2. Steps 6-8 needs to be done for source and target folder
@@ -575,7 +575,7 @@ If this fails, the client has to make sure that it retries or revert the upload 
 
 ##### Encrypted folder gets deleted
 If WebDAV endpoints does not list an encrypted folder anymore, the client has to check if this is a valid delete.
-Therefore, the client has to request /ocs/v2.php/apps/end_to_end_encryption/api/v1/meta-data/<folder-id> and validate the metadata file and check if `deleted` is set to true.
+Therefore, the client has to request /ocs/v2.php/apps/end_to_end_encryption/api/v2/meta-data/<folder-id> and validate the metadata file and check if `deleted` is set to true.
 Otherwise, the client needs to display warning that the folder was maliciously deleted and refuse to delete the locally synced content.
 
 #### Accessing encrypted files
