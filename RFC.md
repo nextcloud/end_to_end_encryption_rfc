@@ -480,7 +480,7 @@ The verification process requires three main components:
   - Base64-decode the byte array. 
   - Generate an X509Certificate object from the decoded bytes. 
   - This results in a list of usable X.509 certificates.
-5.Construct Signature Object:
+5. Construct Signature Object:
   - Take the Base64-encoded signature received from the server.
   - Decode it into a byte array via Base64 decoding.
   - Parse the byte array into an ASN.1 structure.
