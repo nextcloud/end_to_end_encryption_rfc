@@ -473,7 +473,7 @@ The verification process requires three main components:
   - This produces the decrypted folder metadata file, which includes: A list of users and each user’s certificate
 3. Prepare Metadata for Verification: 
   - Remove the file-drop field from the metadata JSON. 
-  - Serialize the resulting JSON.
+  - Serialize the resulting JSON alphabetically ordered.
 4. Extract and Build Certificates, for each certificate in the decrypted metadata: 
   - Remove the -----BEGIN CERTIFICATE----- and -----END CERTIFICATE----- markers. 
   - Convert the remaining content to a UTF-8 byte array. 
