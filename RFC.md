@@ -474,7 +474,7 @@ The verification process requires three main components:
 3. Prepare Metadata for Verification: 
   - Remove the file-drop field from the metadata JSON. 
   - Serialize the resulting JSON.
-4. Extract and Build Certificates: For each certificate in the decrypted metadata: 
+4. Extract and Build Certificates, for each certificate in the decrypted metadata: 
   - Remove the -----BEGIN CERTIFICATE----- and -----END CERTIFICATE----- markers. 
   - Convert the remaining content to a UTF-8 byte array. 
   - Base64-decode the byte array. 
