@@ -466,7 +466,7 @@ The verification process requires three main components:
 
 #### Step-by-Step Verification Process
 
-1. Download the metadata and its corresponding signature from the endpoint: '/ocs/v2.php/apps/end_to_end_encryption/api/v2/meta-data/'
+1. Download the metadata and its corresponding signature
 2. Decrypt the Metadata Key:  
   - Locate the current user's entry in the users array within the metadata. 
   - Extract the encrypted metadata key for that user. Decrypt this key using the client’s private key. 
