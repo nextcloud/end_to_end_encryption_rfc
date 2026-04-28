@@ -456,6 +456,40 @@ Before using the metadata file, e.g. on a folder refresh the client has to verif
 The client has to find its metadata-key in the `users` list and decrypt it.
 Then the client passes the JSON binary and the decrypted metadata-key to the verification algorithm.
 
+#### Overview
+
+The verification process requires three main components:
+
+- The metadata (JSON)
+- The signature (Base64-encoded)
+- The certificates (from decrypted metadata)
+
+#### Step-by-Step Verification Process
+
+1. Download the metadata and its corresponding signature
+2. Decrypt the Metadata Key:  
+  - Locate the current user's entry in the users array within the metadata. 
+  - Extract the encrypted metadata key for that user. Decrypt this key using the client’s private key. 
+  - This produces the decrypted folder metadata file, which includes: A list of users and each user’s certificate
+3. Prepare Metadata for Verification: 
+  - Remove the file-drop field from the metadata JSON. 
+  - Serialize the resulting JSON alphabetically ordered.
+4. Extract and Build Certificates, for each certificate in the decrypted metadata: 
+  - Convert the PEM encoded certificates to x.509
+5. Construct Signature Object:
+  - Take the Base64-encoded signature received from the server.
+  - Decode it into a byte array via Base64 decoding.
+  - Parse the byte array into an ASN.1 structure.
+  - Create a ContentInfo object from this structure.
+6. Prepare Signed Content:
+  - Encode the serialized metadata JSON into a Base64 string.
+  - Convert it into a UTF-8 byte array.
+  - Wrap it as a processable content object.
+7. Create CMSSignedData Object:
+  - Combine the ContentInfo (signature) and the processable content.
+  - Construct a CMSSignedData object. 
+8. Validate the CMSSignedData against the list of extracted X.509 certificates. Ensure the signature is valid and matches the metadata.
+
 If any of the following checks fail, the client needs to refuse further sync and informs the user:
 - check counter: new counter must be greater than locally stored counter
 - check signature
