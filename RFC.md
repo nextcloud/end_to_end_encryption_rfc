@@ -475,11 +475,7 @@ The verification process requires three main components:
   - Remove the file-drop field from the metadata JSON. 
   - Serialize the resulting JSON alphabetically ordered.
 4. Extract and Build Certificates, for each certificate in the decrypted metadata: 
-  - Remove the -----BEGIN CERTIFICATE----- and -----END CERTIFICATE----- markers. 
-  - Convert the remaining content to a UTF-8 byte array. 
-  - Base64-decode the byte array. 
-  - Generate an X509Certificate object from the decoded bytes. 
-  - This results in a list of usable X.509 certificates.
+  - Convert the PEM encoded certificates to x.509
 5. Construct Signature Object:
   - Take the Base64-encoded signature received from the server.
   - Decode it into a byte array via Base64 decoding.
