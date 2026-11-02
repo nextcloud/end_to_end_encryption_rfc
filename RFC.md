@@ -240,7 +240,7 @@ This is done the following way:
 
 1. Client downloads private key from the `/private-key` endpoint.
 2. Client asks the user for the mnemonic and decrypts the private key using AES/GCM/NoPadding as cipher (256 bit key size) and PBKDF2WithHmacSHA256 as key derivation with 600000 iterations. Alternatively the client should use the former algorithm and parameters in case the private key was uploaded with an older RFC version. A client must try the following settings:
-  1. PBKDF2WithHmacSHA1 as key derivation with 1000 iterations
+  1. PBKDF2WithHmacSHA1 as key derivation with 1024 iterations
   2. PBKDF2WithHmacSHA1 as key derivation with 600000 iterations
   3. PBKDF2WithHmacSHA256 as key derivation with 600000 iterations
 3. Client checks if private key belongs to previously downloaded public certificate.
