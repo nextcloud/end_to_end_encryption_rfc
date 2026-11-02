@@ -371,9 +371,12 @@ Filedrop:
 
 When creating a new folder, an initial metadata file needs to be created with following values
 - counter starts with 0
-- generate a new metadata key
-- if folder is topmost encrypted folder, the users array contains the current user with userId, certificate and encrypted metadata key
-- if folder is a subfolder of an encrypted folder, the users-array is not included
+- if folder is topmost encrypted folder
+  - generate a new metadata-key
+  - the users array contains the current user with userId, certificate and encrypted metadata-key
+- if folder is a subfolder of an encrypted folder
+  - the metadata-key of the topmost encrypted folder is used, all subfolders share the metadata-key of their topmost encrypted folder
+  - the users-array is not included
 
 The metadata has to be created by sending a `POST` request to the `/meta-data/<folder-id>` OCS API endpoint, where `<folder-id>` has to be the folder ID indicated by our WebDAV API.
 - The encrypted metadata has to be sent as the URL-encoded `metaData` parameter.
@@ -589,7 +592,7 @@ To access encrypted files the client has to do the following steps:
 1. Check for changes in the encrypted folder.
    If not current, download the latest metadata file of the encrypted folder.
 2. Verify the metadata file as described in [Verifying the metadata](#verifying-the-metadata)
-3. Decrypt the metadata file using the metadata-key
+3. Decrypt the metadata file using the metadata-key of the topmost encrypted folder
 4. Look up the file-metadata of the files in the `files` array of the decrypted metadata
 5. Download the referenced files by their random identifier using WebDAV
 6. Decrypt the file
@@ -631,6 +634,7 @@ To create a share the following actions have to be performed:
 4. Add/replace the new metadata-key of every user in the users-list. 
    The metadata-key is encrypted with the user's public key.
 5. The SHA-256 hash of the metadata-key is added to the keyChecksum array.
+6. The metadata of all subfolders is encrypted with the new metadata-key and uploaded.
 
 #### Remove someone from an existing share
 To remove someone from an existing share the following actions have to be performed:
@@ -641,6 +645,7 @@ To remove someone from an existing share the following actions have to be perfor
 4. Add/replace the new metadata-key to every user in the users-list. 
    The metadata-key is encrypted with the user's public key.
 5. The SHA-256 hash of metadata key is added to keyChecksum array.
+6. The metadata of all subfolders is encrypted with the new metadata-key and uploaded.
 
 ### Sharing to external users
 To share end-to-end encrypted files with users without a Nextcloud account,
