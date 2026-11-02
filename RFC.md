@@ -376,28 +376,18 @@ When creating a new folder, an initial metadata file needs to be created with fo
 - if folder is a subfolder of an encrypted folder, the users-array is not included
 
 The metadata has to be created by sending a `POST` request to the `/meta-data/<folder-id>` OCS API endpoint, where `<folder-id>` has to be the folder ID indicated by our WebDAV API.
-The `POST` parameter `metaData` with the encrypted metadata has to be used.
-And the `X-NC-E2EE-SIGNATURE` header with the metadata signature has to be included in the request (see below for how to generate).
+- The encrypted metadata has to be sent as the URL-encoded `metaData` parameter.
+- The metadata signature has to be sent as the `X-NC-E2EE-SIGNATURE` HTTP header (see [Signing the metadata](#signing-the-metadata)).
+- The lock token has to be sent as the `e2e-token` HTTP header.
+  Thus the folder has to be locked before creating the metadata, in case of a subfolder the lock of the parent folder is used
+  (see [Uploading payload and metadata file](#uploading-payload-and-metadata-file-step-5--8)).
+
+If metadata already exists for the folder, the server responds with HTTP status code 409 Conflict.
 
 #### Update metadata file
-To keep the metadata and the file in sync locking is required. The client needs to lock the encrypted folder. If the lock operation succeeded the server will return a successful response together with a token in the response body. In case of a lost connection the client can restart the operation later with another "lock" request, in this case the client should send the token with the new lock call. This enables the server to decide if the client is allowed to retry the upload.
-
-After locking was successful, the client will upload the encrypted file and afterwards the metadata file. If both files are uploaded successfully, the client will finish the operation by sending an unlock request.
-
-To lock the metadata a `POST` request to the `/lock/<file-id>` endpoint has to be sent.
-Where `<file-id>` has to be the file ID indicated by our WebDAV API.
-To add an existing lock token it can be sent as `e2e-token` parameter.
-The request will return a JSON object with the `e2e-token` key containing the lock token.
-
-To update the metadata a `PUT` request to `/meta-data/<file-id>` has to be sent.
-- Where `<file-id>` has to be the file ID indicated by our WebDAV API.
-- The encrypted metadata must be sent as the URL-encoded `metaData` parameter.
-- The lock token obtained in from the lock endpoint has to be used as the `e2e-token` HTTP header.
-- The metadata signature has to be provided as the `X-NC-E2EE-SIGNATURE` HTTP header.
-
-To unlock the metadata a DELETE request to `/lock/<file-id>` has to be sent.
-Where `<file-id>` has to be the file ID indicated by our WebDAV API.
-The previously received lock token has to be sent as `e2e-token` HTTP header.
+Every update of the metadata file has to be done while the folder is locked.
+The client locks the folder, uploads the changed files and the updated metadata file and finally unlocks the folder.
+The required requests are described in [Uploading payload and metadata file](#uploading-payload-and-metadata-file-step-5--8).
 
 #### Updating a user certificate
 
@@ -537,8 +527,10 @@ If any of the following steps fail, show a verbose warning to the user, unlock t
 
 #### Uploading payload and metadata file (step 5 & 8)
 To keep the metadata and the file in sync locking is required.
-The client needs to lock the topmost encrypted (sub-)folder which needs to be changed and pass the counter as header.
-The server checks if the incremented counter is a direct successor of the currently stored counter, if not it will fail with HTTP status code 409 Conflict.
+The client needs to lock the topmost encrypted (sub-)folder which needs to be changed and pass the incremented counter as header.
+The lock also covers all subfolders of the locked folder.
+The server checks if the incremented counter is greater than the counter of the last lock of this folder, if not it will fail with HTTP status code 412 Precondition Failed.
+If the folder (or one of its parent folders) is already locked, the server responds with HTTP status code 423 Locked.
 If the lock operation succeeded, the server responds with HTTP status code 200 together with a token in the response body.
 In case the client lost connection after locking the folder, it can restart the operation later with another "lock" request.
 In this case the client must send the token with the new lock call.
@@ -549,20 +541,30 @@ After locking was successful, the client will
 - upload the metadata file with signature as header
 
 After both files are uploaded successfully the client will finish the operation by sending an unlock request.
+All changes done while the folder is locked are only applied by the server when the folder is unlocked.
 
 The `<folder-id>` denotes the ID of the end-to-end encrypted folder given by the WebDAV API.
 
-To lock the folder a `POST` request to the `/lock/<folder-id>` endpoint has to be sent with the incremented counter as header `X-NC-E2EE-COUNTER`.
-To use an existing lock token it can be sent as `e2e-token` HTTP header.
+To lock the folder a `POST` request to the `/lock/<folder-id>` endpoint has to be sent.
+- The incremented counter has to be sent as the `X-NC-E2EE-COUNTER` HTTP header.
+- To reuse an existing lock token it can be sent as the `e2e-token` parameter.
+- The server returns the lock token as the `e2e-token` key of the response data.
+
+All WebDAV requests modifying the content of a locked folder (e.g. `PUT`, `MKCOL`, `MOVE`, `COPY` or `DELETE`) have to include the lock token as the `e2e-token` HTTP header.
 
 To update the metadata a `PUT` request to the `/meta-data/<folder-id>` endpoint has to be sent.
 - The computed signature needs to be sent as header `X-NC-E2EE-SIGNATURE`.
 - The current lock token has to be included as `e2e-token` header.
 - The encrypted metadata JSON has to be sent as the URL-encoded `metaData` parameter.
 
-To unlock the folder a DELETE request to `/lock/<folder-id>` has to be sent.
-The previously received lock token has to be sent as `e2e-token` header.
-If this fails, the client has to make sure that it retries or revert the upload so that the folder is then again in an unlocked and consistent state.
+If the folder is not locked with the given token, the server responds with HTTP status code 412 Precondition Failed.
+
+To unlock the folder a `DELETE` request to `/lock/<folder-id>` has to be sent.
+- The previously received lock token has to be sent as `e2e-token` HTTP header.
+- To discard all changes done while the folder was locked, the parameter `abort` with the value `true` can be sent.
+  The server then reverts the changes to the state before the folder was locked.
+
+If unlocking fails, the client has to make sure that it retries or aborts the operation so that the folder is then again in an unlocked and consistent state.
 
 
 #### Detect encrypted folder
