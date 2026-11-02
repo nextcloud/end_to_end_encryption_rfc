@@ -273,7 +273,7 @@ First of all, data access to such folders happens via our regular WebDAV API ava
 After creating a folder via WebDAV the folder has to be flagged as end-to-end encrypted.
 This can be performed by sending a `PUT` request to the `/encrypted/<folder-id>` OCS endpoint where `<folder-id>` has to be the folder ID indicated by our WebDAV API.
 
-Once this flag has been set the folder will not be accessible anymore via web and also not displayed to regular WebDAV clients.
+Once this flag has been set the folder is only accessible by clients supporting end-to-end encryption, regular WebDAV clients cannot access it anymore.
 Only empty folders can be marked as end-to-end encrypted.
 Once a folder is marked as encrypted, it cannot be marked as unencrypted again.
 
