@@ -492,7 +492,7 @@ If any of the following steps fail, show a verbose warning to the user, unlock t
       1. Generate a new 128-bit encryption key for the file and encrypt it using AES/GCM/NoPadding
       2. Generate a new 96-bit IV for the file
       3. Encrypt the file using the key and IV with AES/GCM/NoPadding
-      4. Create new random identifier by generating a random UUID and removing the dash (`-`). The identifier must follow `/^[0-9a-fA-F]{32}$/` TODO: use a better id, or ignore "-"
+      4. Create new random identifier by generating a random UUID and removing the dash (`-`). The identifier must follow `/^[0-9a-fA-F]{32}$/`
       5. Add new file to the files array in the metadata file with UUID as identifier and 
         - filename
         - encryption key
@@ -530,11 +530,12 @@ If any of the following steps fail, show a verbose warning to the user, unlock t
     * Move subfolder into another subfolder:
       1. Remove folder from folders array in metadata file of source folder and add it to metadata folders array in target folder
       2. Steps 6-8 needs to be done for source and target folder
-      3. TODO request to E2E API: move folder
+      3. Move the encrypted subfolder using a WebDAV `MOVE` request, the subfolder keeps its random identifier
     * Copy subfolder into another subfolder:
       1. Recursively add new folders and new files, everything needs to be re-encrypted to prevent having the same encryption key and nonce for two different files
       2. Steps 6-8 needs to be done for every source and target folder
-         TODO Operation might be too big to handle on mobile
+
+      _**Note:** As everything needs to be re-encrypted, this operation can be expensive for large folders, e.g. on mobile devices._
     * Delete topmost encrypted folder
       1. Set deleted to true in metadata array
       2. empty files and folders array
