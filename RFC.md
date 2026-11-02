@@ -587,11 +587,11 @@ The client can then present the currently stored files alongside with a warning 
 To access encrypted files the client has to do the following steps:
 
 1. Check for changes in the encrypted folder.
-   If not current, get the latest metadata file.
-2. Download actual metadata of encrypted folder
-3. Verify & decrypt the metadata file
-4. Loop over “files” array and decrypt the array with the newest metadata key
-5. Download the referenced files using WebDAV
+   If not current, download the latest metadata file of the encrypted folder.
+2. Verify the metadata file as described in [Verifying the metadata](#verifying-the-metadata)
+3. Decrypt the metadata file using the metadata-key
+4. Look up the file-metadata of the files in the `files` array of the decrypted metadata
+5. Download the referenced files by their random identifier using WebDAV
 6. Decrypt the file
     1. Get the key from the metadata file
     2. Get the IV from the metadata file
