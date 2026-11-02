@@ -446,8 +446,15 @@ The Section [Uploading payload and metadata](#uploading-payload-and-metadata-fil
 
 ### Verifying the metadata
 Before using the metadata file, e.g. on a folder refresh the client has to verify the signature.
-The client has to find its metadata-key in the `users` list and decrypt it.
-Then the client passes the JSON binary and the decrypted metadata-key to the verification algorithm.
+The signature is returned as the `X-NC-E2EE-SIGNATURE` HTTP response header of the `GET` request to the `/meta-data/<folder-id>` OCS endpoint.
+It is also available as the `{http://nextcloud.org/ns}e2ee-metadata-signature` WebDAV property of the folder.
+
+To verify the signature the client has to:
+1. Prepare the signed data from the metadata as described in [Signing the metadata](#signing-the-metadata).
+2. Find the user identified by the SignerIdentifier of the CMS signature in the `users` array of the topmost encrypted folder.
+3. Verify the CMS signature using the certificate of this user.
+
+After the signature was verified, the client has to find its metadata-key in the `users` array and decrypt it to decrypt the metadata.
 
 If any of the following checks fail, the client needs to refuse further sync and informs the user:
 - check counter: new counter must be greater than locally stored counter
@@ -714,7 +721,10 @@ Given a share with User A, B and C.
 User C is removed by User A at a later time.
 User C now tries to gain access to the share again by first adding itself via Nextcloud share API.
 User C adds itself to users array of metadata file again.
-User A/B can now detect the malicious attack as the hash of the latest metadata is not in keyChecksums.
+User C does not know the metadata-key that was generated when user C was removed.
+So if user C creates a new metadata-key to get access, the checksum of the metadata-key generated on removal is missing in keyChecksums.
+User A/B can now detect the malicious attack as a hash has been removed from keyChecksums.
+If user C instead keeps the encrypted metadata, user C cannot decrypt it, but the same considerations as in the next scenario apply.
 
 #### User with valid certificate tries to add himself
 In this scenario the attacker is a valid user of the Nextcloud instance and therefore has a certificate issued by the Nextcloud server or trusted CA.
@@ -722,10 +732,15 @@ Main idea of the attack:
 - Attacker adds himself to the users list and waits until a new metadata key is used.
 - The new metadata-key will be encrypted with the public key of the attacker
 
-This attack is prohibited by the signature on the metadata file and the metadata key.
-The attacker cannot create a valid signature, because he does not know the metadata key, which is necessary to create the signature.
+The signature on its own does not prevent this attack.
+Creating the signature does not require the metadata-key and the signer is looked up in the users array,
+so the attacker can create a valid signature with their own certificate after adding themselves.
 
-Upon next sync, the other clients detect the bad signature.
+The attacker cannot modify the encrypted part of the metadata, as this requires the metadata-key.
+Thus the users array changed, but the counter was not increased.
+Only clients that know the latest metadata are able to detect this, e.g. a newly added device cannot.
+
+_**Note:** Detecting this scenario is not yet covered by the checks described in [Verifying the metadata](#verifying-the-metadata)._
 
 #### Attacker deletes topmost folder and/or metadata file on server
 - Attacker deletes on server either metadata file, WebDAV folder or both
