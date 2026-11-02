@@ -277,7 +277,7 @@ In case the central data recovery key is enabled the metadata will also be encry
 The JSON document contains at least 3 keys and at most 4 keys:
 - `metadata`: The value is the encrypted inner metadata
 - `users`: The list of users with access to the folder
-- `version`: The metadata version
+- `version`: The metadata version, either `"2.0"` or `"2.1"` if the users array contains users of public shares (see [Sharing to external users](#sharing-to-external-users))
 - `filedrop`: (optional) file drop encrypted files
 
 ```json
@@ -676,6 +676,7 @@ with some changes:
 
 This new "share user" has to be added just like a normal user to the metadata.
 To distinguish between public share users and normal users the user id can be checked for the `s:` prefix as the colon character is not allowed in normal user ids.
+When a public share user is added to the users array, the metadata version has to be set to `"2.1"`.
 
 The generated private key is encrypted as described for the initial setup with a new generated mnemonic,
 and will be stored on the server under the `s:SHARE_TOKEN` id.
