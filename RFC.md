@@ -158,6 +158,7 @@ The following steps will walk through the technical implementation of the encryp
 * files-array: associative array mapping random identifiers names to the (encrypted) metadata of the file
 * users-array: array of information of users. Used to list all users of a shared and encrypted folder, with their certificate and the encrypted metadata key
 * metadata-key: key used to encrypt the metadata of the folder
+* filedrop-key: key used to encrypt a single entry of the filedrop array
 * metadata: metadata of all files (file-metadata) and sub-folders in the encrypted folder, list of checksums of metadata-keys and a counter
 * PEM: Textual encoding of certificate and key structures according to [RFC 7468](https://datatracker.ietf.org/doc/html/rfc7468)
 
@@ -307,7 +308,8 @@ The JSON document contains at least 3 keys and at most 4 keys:
       "<uid>": {
          // The "ciphertext" key contains the encrypted metadata for the file
          // see "Filedrop" example below for the plaintext structure.
-         // It is encrypted using AES/GCM/NoPadding with 128 bit key size.
+         // It is encrypted using AES/GCM/NoPadding with 128 bit key size,
+         // using a newly generated filedrop-key for every entry.
          // 1. The inner JSON document is stringified
          // 2. Then gzipped
          // 3. Then encrypted
@@ -317,7 +319,7 @@ The JSON document contains at least 3 keys and at most 4 keys:
          "authenticationTag": "123",
          "users": [
               // The following contains the reference to all users who have access to filedrop.
-              // The metadata-key is encrypted with RSA/ECB/OAEPWithSHA-256AndMGF1Padding
+              // The filedrop-key is encrypted with RSA/ECB/OAEPWithSHA-256AndMGF1Padding
              { 
                "userId": "testUser",
                "encryptedFiledropKey": "encrypted filedrop-key then base64"
@@ -362,9 +364,9 @@ Filedrop:
    "filename": "test.txt",
    // Mimetype. If unknown, use "application/octet-stream"
    "mimetype": "plain/text",
+   // Encryption algorithm: AES/GCM/NoPadding (128 bit key size)
    "nonce": "",
    "authenticationTag": "",
-   // Encryption algorithm: RSA/ECB/OAEPWithSHA-256AndMGF1Padding algo
    "key": "jtboLmgGR1OQf2uneqCVHpklQLlIwWL5TXAQ0keK"
 }
 ```
@@ -413,6 +415,11 @@ During that process the usual process to modify one folder metadata file has to 
 ##### Migrating filedrop
 Files added via secure file drop are added to filedrop array via web browser.
 The filedrop-key, similar to metadata-key, is then encrypted to all users of this folder, so that all users that have access can migrate.
+
+To add entries to the filedrop array a `PUT` request to the `/meta-data/<folder-id>/filedrop` OCS endpoint has to be sent.
+- The new entries have to be sent as the URL-encoded `filedrop` parameter, a JSON object mapping the random identifiers to the encrypted entries.
+- The server merges the new entries into the filedrop array of the metadata.
+- No lock token is required and the counter is not changed, as the filedrop array is not part of the signed metadata.
 
 As soon as a client downloads metadata file and finds a non-empty filedrop array, they shall do
 
