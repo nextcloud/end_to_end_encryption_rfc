@@ -669,8 +669,8 @@ it is possible to create public shares with end-to-end encryption.
 For this the encrypted root folder has to be shared with Nextcloud sharing flow as a link share.
 Then a public- / private key pair has to be generated as described for the initial setup,
 with some changes:
-- For all API calls the `shareToken` parameter, with the value of the token of the created share,
-  has to be included in the requests.
+- For the requests to the `/public-key` and `/private-key` endpoints the `shareToken` parameter,
+  with the value of the token of the created share, has to be included.
 - The `CN` of the public certificate has to be set to `s:SHARE_TOKEN`,
   where `SHARE_TOKEN` has to be replaced with the token of the share.
 
@@ -682,6 +682,10 @@ The generated private key is encrypted as described for the initial setup with a
 and will be stored on the server under the `s:SHARE_TOKEN` id.
 The client then should provide the new mnemonic to the sharing user which has to provide this information
 to the share recipient using a secure second channel.
+
+The share recipient has to include the share token as the `X-NC-E2EE-SHARE-TOKEN` HTTP header in all OCS API requests,
+e.g. to download the private key, to lock the folder or to access the metadata.
+Only for adding filedrop entries the share token is sent as the `shareToken` parameter.
 
 ### Edge cases
 #### Handling of complete key material loss
