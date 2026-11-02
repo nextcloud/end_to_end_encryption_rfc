@@ -34,11 +34,8 @@
   * [Attack scenarios](#attack-scenarios)
 
 ## Introduction
-With the announcement of the Nextcloud end-to-end encryption techpreview, we would like to invite you to scrutinize our source code and cryptographic approach.
-
-Please note that end-to-end encryption feature is a work-in-progress and this document may describe functionalities or approaches not yet implemented in our testing releases. 
-This document is meant as authoritative implementation guideline for our clients. 
-For the sake of having smaller and incremental steps towards the final implementation we are going to continuously release updated builds of our clients.
+This document specifies the Nextcloud end-to-end encryption and is meant as authoritative implementation guideline for our clients.
+We would like to invite you to scrutinize our source code and cryptographic approach.
 
 We are looking forward to your input to refine our approach towards client-side encryption. 
 In addition, we will also make sure to validate our approach on time by external cryptographic experts.
@@ -53,14 +50,15 @@ Thus we require that:
 * The used library for cryptographic primitives must be in use widely.
 * The used library for cryptographic primitives has undergone successful security audits.
 
-Also due to our wide range of supported systems, the library must be available for the following of our supported environments:
+Also due to our wide range of supported systems, the library must be available for all currently supported versions of the following environments:
 
-* iOS 9+
-* Android 6.0+
-* Mac OS X 10.9+
-* Windows 7+
+* iOS
+* Android
+* macOS
+* Windows
 * commonly used Linux distributions
-* PHP 7.0+
+* Web browsers (e.g. using the Web Crypto API)
+* PHP
 
 _**Note:** While we do not have any current plans to add support for potential server-side decryption we want to keep this possibility open for the future._
 
