@@ -23,6 +23,8 @@
   * [Signing the metadata](#signing-the-metadata)
   * [Verifying the metadata](#verifying-the-metadata)
   * [Modifying and accessing content of an end-to-end encrypted folder](#modifying-and-accessing-content-of-an-end-to-end-encrypted-folder)
+  * [Sharing encrypted folders to other users](#sharing-encrypted-folders-to-other-users)
+  * [Sharing to external users](#sharing-to-external-users)
   * [Edge cases](#edge-cases)
 * [Possible extensions](#possible-extensions)
   * [Manual key verification](#manual-key-verification)
@@ -248,6 +250,23 @@ This is done the following way:
 5. Client stores the private key in the keychain of the device.
 6. The mnemonic is stored in the keychain of the device (ideally with spaces so it can be shown more readable).
 
+#### Updating a user certificate
+
+A user certificate may expire or be revoked and renewed if needed. In such case, a migration will be needed as the key pair will change and metadata keys encrypted with the former public key will no longer be accessible.
+
+The certificate migration will happen at initiative from one Files client of the specific concerned user. That user will trigger the certificate migration. During that process the following steps need to happen:
+
+- prerequisite is that all currently encrypted folders are synced by the client that will do a certificate change or renewal. The user interface of clients should make this blocking before performing the migration.
+- on demand certificate migration is still possible as a fallback
+- replace the certificate that is currently stored on the server
+- identify all folders having files currently accessible from this user and for each of them:
+  - decrypt the metadata key associated to each file for accessible by this user
+  - encrypt it with the new public key
+  - upload the metadata file again with the new encrypted metadata key and the new certificate (without the private key)
+  - sign the metadata file by the new user certificate
+
+During that process the usual process to modify one folder metadata file has to be followed as described in [Update metadata file](#update-metadata-file).
+
 ### Creating an end-to-end encrypted folder
 To create an end-to-end encrypted folders multiple steps have to be performed.
 First of all, data access to such folders happens via our regular WebDAV API available at `/remote.php/dav/{userId}/files`.
@@ -396,25 +415,7 @@ Every update of the metadata file has to be done while the folder is locked.
 The client locks the folder, uploads the changed files and the updated metadata file and finally unlocks the folder.
 The required requests are described in [Uploading payload and metadata file](#uploading-payload-and-metadata-file-step-5--8).
 
-#### Updating a user certificate
-
-A user certificate may expire or be revoked and renewed if needed. In such case, a migration will be needed as the key pair will change and metadata keys encrypted with the former public key will no longer be accessible.
-
-The certificate migration will happen at initiative from one Files client of the specific concerned user. That user will trigger the certificate migration. During that process the following steps need to happen:
-
-- prerequisite is that all currently encrypted folders are synced by the client that will do a certificate change or renewal. The user interface of clients should make this blocking before performing the migration.
-- on demand certificate migration is still possible as a fallback
-- replace the certificate that is currently stored on the server
-- identify all folders having files currently accessible from this user and for each of them:
-  - decrypt the metadata key associated to each file for accessible by this user
-  - encrypt it with the new public key
-  - upload the metadata file again with the new encrypted metadata key and the new certificate (without the private key)
-  - sign the metadata file by the new user certificate
-
-During that process the usual process to modify one folder metadata file has to be followed as described earlier in this document.
-
-
-##### Migrating filedrop
+#### Migrating filedrop
 Files added via secure file drop are added to filedrop array via web browser.
 The filedrop-key, similar to metadata-key, is then encrypted to all users of this folder, so that all users that have access can migrate.
 
@@ -516,7 +517,7 @@ If any of the following steps fail, show a verbose warning to the user, unlock t
       1. Remove the corresponding entry from the files array
     * Move file into subfolder:
       1. Remove file from files array in metadata file of source folder and add it to metadata files array in target folder
-      2. Steps 6-8 need to be done for source and target folder
+      2. Steps 6-8 (encrypt, sign and upload the metadata) need to be done for source and target folder
     * Copy file into subfolder: 
       1. Same like create new file, to prevent having the same encryption key and nonce for two different files
     * Create new subfolder:
@@ -529,11 +530,11 @@ If any of the following steps fail, show a verbose warning to the user, unlock t
       2. Delete the metadata of the subfolder by sending a `DELETE` request to the `/meta-data/<folder-id>` OCS endpoint
     * Move subfolder into another subfolder:
       1. Remove folder from folders array in metadata file of source folder and add it to metadata folders array in target folder
-      2. Steps 6-8 needs to be done for source and target folder
+      2. Steps 6-8 (encrypt, sign and upload the metadata) need to be done for source and target folder
       3. Move the encrypted subfolder using a WebDAV `MOVE` request, the subfolder keeps its random identifier
     * Copy subfolder into another subfolder:
       1. Recursively add new folders and new files, everything needs to be re-encrypted to prevent having the same encryption key and nonce for two different files
-      2. Steps 6-8 needs to be done for every source and target folder
+      2. Steps 6-8 (encrypt, sign and upload the metadata) need to be done for every source and target folder
 
       _**Note:** As everything needs to be re-encrypted, this operation can be expensive for large folders, e.g. on mobile devices._
     * Delete topmost encrypted folder
