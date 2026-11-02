@@ -26,6 +26,7 @@ In addition, we will also make sure to validate our approach on time by external
 * [Conventions and terminology](#conventions-and-terminology)
   * [Requirements language](#requirements-language)
   * [Terminology](#terminology)
+  * [Encoding](#encoding)
 * [Architecture overview](#architecture-overview)
   * [Trust model](#trust-model)
   * [Key hierarchy](#key-hierarchy)
@@ -35,24 +36,43 @@ In addition, we will also make sure to validate our approach on time by external
   * [Security goals](#security-goals)
 * [Data formats](#data-formats)
   * [Metadata file](#metadata-file)
+  * [Encrypted payload](#encrypted-payload)
+  * [User](#user)
+  * [Metadata](#metadata)
+  * [File entry](#file-entry)
+  * [Filedrop entry](#filedrop-entry)
+  * [Random identifiers](#random-identifiers)
+  * [Encrypted private key](#encrypted-private-key)
   * [Initial metadata](#initial-metadata)
 * [Cryptographic operations](#cryptographic-operations)
+  * [Cryptographic parameters](#cryptographic-parameters)
+  * [Encrypting data](#encrypting-data)
+  * [Encrypting the metadata](#encrypting-the-metadata)
   * [Signing the metadata](#signing-the-metadata)
   * [Verifying the metadata](#verifying-the-metadata)
 * [Protocol procedures](#protocol-procedures)
   * [Adding an end-to-end encrypted device](#adding-an-end-to-end-encrypted-device)
   * [Creating an end-to-end encrypted folder](#creating-an-end-to-end-encrypted-folder)
+  * [Locking](#locking)
   * [Modifying content of an end-to-end encrypted folder](#modifying-content-of-an-end-to-end-encrypted-folder)
   * [Accessing content of an end-to-end encrypted folder](#accessing-content-of-an-end-to-end-encrypted-folder)
   * [Migrating filedrop](#migrating-filedrop)
   * [Sharing encrypted folders to other users](#sharing-encrypted-folders-to-other-users)
   * [Sharing to external users](#sharing-to-external-users)
 * [HTTP API](#http-api)
+  * [General requirements](#general-requirements)
+  * [Endpoint overview](#endpoint-overview)
+  * [Key endpoints](#key-endpoints)
+  * [Encryption endpoints](#encryption-endpoints)
+  * [Lock endpoints](#lock-endpoints)
+  * [Metadata endpoints](#metadata-endpoints)
+  * [WebDAV](#webdav)
 * [Security considerations](#security-considerations)
   * [Accepted risks](#accepted-risks)
   * [Attack scenarios](#attack-scenarios)
   * [Handling of complete key material loss](#handling-of-complete-key-material-loss)
 * [Versioning and backward compatibility](#versioning-and-backward-compatibility)
+* [Appendix: Examples](#appendix-examples)
 * [Appendix: Possible extensions](#appendix-possible-extensions)
 
 ## Introduction
@@ -175,7 +195,12 @@ Sections marked as informative do not contain requirements.
 * counter: a number in the metadata that is increased with every change of the metadata
 * lock token: a token issued by the server when locking an encrypted folder, required for all modifications of the folder
 * share user: the pseudo user representing the recipients of a public share
-* PEM: Textual encoding of certificate and key structures according to [RFC 7468](https://datatracker.ietf.org/doc/html/rfc7468)
+
+### Encoding
+* Base64: the Base64 encoding with the standard alphabet and padding according to [RFC 4648, Section 4](https://www.rfc-editor.org/rfc/rfc4648#section-4).
+* Hex: the lowercase hexadecimal encoding of binary data.
+* PEM: Textual encoding of certificate and key structures according to [RFC 7468](https://datatracker.ietf.org/doc/html/rfc7468).
+* Keys are always encoded in their raw binary form before being encrypted, wrapped or hashed, never in their Base64 representation.
 
 ## Architecture overview
 _This section is informative._
@@ -223,123 +248,83 @@ The protocol MUST achieve the following goals when assuming an attacker as speci
   Malicious changes are detected at the latest when the client that made the most recent valid change synchronizes the next time.
 
 ## Data formats
+This section defines all data structures exchanged with the server.
+All structures are JSON objects, a complete example is given in [Appendix: Examples](#appendix-examples).
 
 ### Metadata file
-Every encrypted folder MUST have a metadata file containing the following information:
+Every encrypted folder MUST have a metadata file.
+The metadata file is a JSON object with the following keys:
 
-* metadata of all files (file-metadata) and sub-folders
-* list of checksums of metadata-keys
-* users array
-* counter
-
-The metadata is a JSON document with the following structure depicted below.
-We use a notation with inline comments (`//`) for better readability.
-Note that comments are not available in standalone JSON and only used here for better understanding.
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `metadata` | [Encrypted payload](#encrypted-payload) | yes | The encrypted [metadata](#metadata) of the folder. |
+| `users` | array of [User](#user) | topmost encrypted folder only | All users with access to the folder, including the owner. MUST be present for topmost encrypted folders and MUST NOT be present for subfolders. |
+| `filedrop` | object mapping [random identifiers](#random-identifiers) to [Filedrop entries](#filedrop-entry) | no | Files added via secure file drop, which have not been migrated yet, see [Migrating filedrop](#migrating-filedrop). |
+| `version` | string | yes | The metadata version, see [Versioning and backward compatibility](#versioning-and-backward-compatibility). |
 
 In case the central data recovery key is enabled the metadata MUST also be encrypted towards the server's central data recovery key.
 Clients MUST show a prominent warning to the users for such scenarios.
 
-The JSON document contains at least 3 keys and at most 4 keys:
-- `metadata`: The value is the encrypted inner metadata
-- `users`: The list of users with access to the folder, only present for topmost encrypted folders
-- `version`: The metadata version, see [Versioning and backward compatibility](#versioning-and-backward-compatibility)
-- `filedrop`: (optional) file drop encrypted files
+### Encrypted payload
+An encrypted payload holds data encrypted as described in [Encrypting data](#encrypting-data).
 
-```json
-{
-   "metadata": {
-      // The "ciphertext" key contains the encrypted metadata of the folder,
-      // see "Metadata" example below for the plaintext structure.
-      // It is encrypted using AES/GCM/NoPadding with 128 bit key size.
-      // 1. The inner JSON document is stringified
-      // 2. Then gzipped
-      // 3. Then encrypted
-      //    MAKE SURE to always encrypt it using the BINARY representation (NOT base64)
-      //    of "encryptedMetadataKey" from the "users" array below).
-      // 4. Then Base64 encoded
-      "ciphertext": "encrypted metadata",
-      "nonce": "123",
-      "authenticationTag": "123"
-   },
-   "users": [
-      // The following contains the reference to all users who have access to the share, including owner.
-      // A newly created folder thus will also have this array with the owner as its first entry.
-      // The metadata-key is encrypted with RSA/ECB/OAEPWithSHA-256AndMGF1Padding
-      {
-         "userId": "testUser",
-         "certificate": "public key of this user",
-         "encryptedMetadataKey": "encrypted metadata-key then base64, but, ALWAYS used in NON-base64 format when encrypting data with it)"
-      }
-   ],
-   "filedrop": {
-      "<uid>": {
-         // The "ciphertext" key contains the encrypted metadata for the file
-         // see "Filedrop" example below for the plaintext structure.
-         // It is encrypted using AES/GCM/NoPadding with 128 bit key size,
-         // using a newly generated filedrop-key for every entry.
-         // 1. The inner JSON document is stringified
-         // 2. Then gzipped
-         // 3. Then encrypted
-         // 4. Then Base64 encoded
-         "ciphertext": "encrypted metadata",
-         "nonce": "123",
-         "authenticationTag": "123",
-         "users": [
-              // The following contains the reference to all users who have access to filedrop.
-              // The filedrop-key is encrypted with RSA/ECB/OAEPWithSHA-256AndMGF1Padding
-             {
-               "userId": "testUser",
-               "encryptedFiledropKey": "encrypted filedrop-key then base64"
-             }
-         ],
-      },
-      // ...
-   },
-  "version": "2.0"
-}
-```
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `ciphertext` | string | yes | Base64 encoded ciphertext, with the authenticationTag appended. |
+| `nonce` | string | yes | Base64 encoded nonce. |
+| `authenticationTag` | string | yes | Base64 encoded authenticationTag. |
 
-Metadata:
-```json
-{
-   "keyChecksums": [ "list of hashes of (unencrypted) metadata-keys" ], // this builds up a history of metadata keys
-   "deleted": false,
-   "counter": 12,
-   "folders": {
-      "<uid>": "cleartext name",
-      "<uid>": "cleartext name 2"
-   },
-   "files": {
-      "<uid>": {
-         // Unencrypted file name
-         "filename": "test.txt",
-         // Mimetype. If unknown, use "application/octet-stream"
-         "mimetype": "plain/text",
-         // Encryption algorithm: AES/GCM/NoPadding (128 bit key size)
-         "nonce": "",
-         "authenticationTag": "",
-         "key": "jtboLmgGR1OQf2uneqCVHpklQLlIwWL5TXAQ0keK"
-      }
-   }
-}
-```
+### User
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `userId` | string | yes | The user ID, or `s:SHARE_TOKEN` for a [share user](#sharing-to-external-users). |
+| `certificate` | string | yes | The PEM encoded X.509 certificate of the user. |
+| `encryptedMetadataKey` | string | yes | The metadata-key, wrapped with the public key of the user (see [Cryptographic parameters](#cryptographic-parameters)), Base64 encoded. |
 
-Filedrop:
-```json
-{
-   // Unencrypted file name
-   "filename": "test.txt",
-   // Mimetype. If unknown, use "application/octet-stream"
-   "mimetype": "plain/text",
-   // Encryption algorithm: AES/GCM/NoPadding (128 bit key size)
-   "nonce": "",
-   "authenticationTag": "",
-   "key": "jtboLmgGR1OQf2uneqCVHpklQLlIwWL5TXAQ0keK"
-}
-```
+### Metadata
+The metadata is the plaintext of the `metadata` key of the [metadata file](#metadata-file).
 
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `keyChecksums` | array of strings | yes | The Hex encoded SHA-256 hashes of all metadata-keys of the folder. This builds up a history of metadata-keys, entries MUST NOT be removed. |
+| `deleted` | boolean | yes | `true` if the topmost encrypted folder was deleted. |
+| `counter` | integer | yes | Increased with every change of the metadata. |
+| `folders` | object mapping [random identifiers](#random-identifiers) to strings | yes | The cleartext names of the subfolders. |
+| `files` | object mapping [random identifiers](#random-identifiers) to [File entries](#file-entry) | yes | The file-metadata of the files. |
+
+### File entry
+A file entry holds the file-metadata of a file.
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `filename` | string | yes | The cleartext name of the file. |
+| `mimetype` | string | yes | The mimetype of the file. If unknown, `application/octet-stream` MUST be used. |
+| `key` | string | yes | The Base64 encoded file-key. |
+| `nonce` | string | yes | The Base64 encoded nonce used to encrypt the file. |
+| `authenticationTag` | string | yes | The Base64 encoded authenticationTag of the encrypted file. |
+
+### Filedrop entry
+A filedrop entry is an [encrypted payload](#encrypted-payload), encrypted with its own filedrop-key, with an additional key:
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `users` | array of objects | yes | All users with access to the folder. Every object contains the `userId` and the `encryptedFiledropKey`, the filedrop-key wrapped with the public key of the user (see [Cryptographic parameters](#cryptographic-parameters)), Base64 encoded. |
+
+The plaintext of a filedrop entry is a [file entry](#file-entry).
+
+### Random identifiers
 Random identifiers of files and folders MUST follow `/^[0-9a-fA-F]{32}$/`.
 They SHOULD be created by generating a random UUID and removing the dashes (`-`).
+
+### Encrypted private key
+The private key of a user is stored on the server as a string of three Base64 encoded parts, separated by `|`:
+
+```
+{base64(encrypted private key + authenticationTag)}|{base64(nonce)}|{base64(salt)}
+```
+
+The private key is encrypted as described in [Cryptographic parameters](#cryptographic-parameters).
+The plaintext is the Base64 encoded PEM encoding of the [PKCS#8 (RFC 5208)](https://tools.ietf.org/html/rfc5208#section-5) private key.
 
 ### Initial metadata
 When creating a new folder, the client MUST create an initial metadata file with the following values:
@@ -353,24 +338,64 @@ When creating a new folder, the client MUST create an initial metadata file with
 
 ## Cryptographic operations
 
+### Cryptographic parameters
+Clients MUST use the following algorithms and parameters:
+
+| Purpose | Algorithm | Key | Nonce | Authentication tag |
+|---------|-----------|-----|-------|--------------------|
+| File content | AES-GCM (`AES/GCM/NoPadding`) | 128 bit file-key | 96 bit | 128 bit |
+| Metadata | AES-GCM (`AES/GCM/NoPadding`) | 128 bit metadata-key | 96 bit | 128 bit |
+| Filedrop entry | AES-GCM (`AES/GCM/NoPadding`) | 128 bit filedrop-key | 96 bit | 128 bit |
+| Private key | AES-GCM (`AES/GCM/NoPadding`) | 256 bit, derived from the mnemonic | 96 bit | 128 bit |
+| Wrapping metadata-keys and filedrop-keys | RSA-OAEP with SHA-256 and MGF1 (`RSA/ECB/OAEPWithSHA-256AndMGF1Padding`) | RSA key pair of the user | - | - |
+| Metadata signature | CMS signed data, RSASSA-PKCS1-v1_5 with SHA-256 | RSA key pair of the user | - | - |
+| Key checksums | SHA-256 | - | - | - |
+
+The key to encrypt the private key MUST be derived from the mnemonic:
+
+| Parameter | Value |
+|-----------|-------|
+| Mnemonic | 12 words from the English [BIP-0039](https://github.com/bitcoin/bips/blob/master/bip-0039/english.txt) word list, the word list contains 2048 words, thus resulting in 2048^12 possible combinations |
+| Input | the mnemonic, lowercase and without any whitespace |
+| KDF | PBKDF2 with HMAC-SHA256 |
+| Iterations | 600000 |
+| Salt | 40 randomly generated bytes |
+
+Private keys created with an older version of this protocol use different parameters, see [Legacy private key encryption](#legacy-private-key-encryption).
+
+### Encrypting data
+For every encryption with AES-GCM a new random nonce MUST be generated.
+A file-key or filedrop-key MUST NOT be used for more than one file, to prevent having the same key and nonce for two different files.
+
+The encrypted data consists of the ciphertext with the authenticationTag appended.
+Where the [data formats](#data-formats) provide a separate `authenticationTag`, it MUST contain the same authenticationTag.
+
+### Encrypting the metadata
+To encrypt the [metadata](#metadata) or the plaintext of a [filedrop entry](#filedrop-entry), the client MUST:
+1. Stringify the JSON document
+2. Compress it using gzip
+3. Encrypt it as described in [Encrypting data](#encrypting-data), using the binary metadata-key or filedrop-key
+4. Base64 encode the result and store it as [encrypted payload](#encrypted-payload)
+
+Decrypting is done in the reverse order.
+
 ### Signing the metadata
 Every metadata file MUST be signed by the user who created or changed it.
 The signature is a Cryptographic Message Syntax (CMS) signed data structure, according to [RFC 5652](https://datatracker.ietf.org/doc/html/rfc5652):
 - It MUST be created using the certificate of the user.
-- The signed data MUST be prepared from the metadata JSON as follows:
-   1. Remove the `filedrop` part
+- The signed data MUST be prepared from the [metadata file](#metadata-file) as follows:
+   1. Remove the `filedrop` key
    2. Stringify the JSON without spaces and newlines (except in keys or values), with object keys sorted alphabetically
    3. Encode the JSON string with Base64
 - The SignerIdentifier of the CMS container MUST identify the userId of the user who created the signature.
 - It MUST include the signed attributes described in [RFC 6488](https://www.rfc-editor.org/rfc/rfc6488.html).
 - It MUST be generated in detached mode, the metadata is not included in the signature as it is already stored on the server and is always retrieved with a `GET` request.
 
-The encoded binary CMS structure is Base64 encoded and sent as the `X-NC-E2EE-SIGNATURE` HTTP header of the request creating or updating the metadata.
+The encoded binary CMS structure is Base64 encoded and sent as the `X-NC-E2EE-SIGNATURE` HTTP header when [creating](#create-metadata) or [updating](#update-metadata) the metadata.
 
 ### Verifying the metadata
 Before using a metadata file, e.g. on a folder refresh, the client MUST verify its signature.
-The signature is returned as the `X-NC-E2EE-SIGNATURE` HTTP response header of the `GET` request to the `/meta-data/<folder-id>` OCS endpoint.
-It is also available as the `{http://nextcloud.org/ns}e2ee-metadata-signature` WebDAV property of the folder.
+The signature is returned when [getting the metadata](#get-metadata).
 
 To verify the signature the client MUST:
 1. Prepare the signed data from the metadata as described in [Signing the metadata](#signing-the-metadata).
@@ -392,17 +417,15 @@ If any of the following checks fail, the client MUST refuse further sync and inf
 As a first step, a device has to be added to an account.
 Depending on whether an end-to-end encrypted device already has been added to an account, the device MUST either create new key material or use existing key material.
 
-To check whether a certificate has already been issued, the client SHOULD use the `/public-key` OCS endpoint.
-In addition, the client MUST download the server's public key from the `/server-key` OCS endpoint and MUST use it to verify the certificate chain in all future operations.
+To check whether a certificate has already been issued, the client SHOULD [get the public keys](#get-public-keys).
+In addition, the client MUST [get the server key](#get-server-key) and MUST use it to verify the certificate chain in all future operations.
 
 #### Initial device
 When a device is initially added to an account the device MUST generate all relevant key material for the user account and provision it on the server:
 
-1. The client generates a new private key and a X.509 Certificate Signing Request (CSR), following [RFC 2986](https://datatracker.ietf.org/doc/html/rfc2986).
+1. The client generates a new RSA key pair and a X.509 Certificate Signing Request (CSR), following [RFC 2986](https://datatracker.ietf.org/doc/html/rfc2986).
    The `CN` of the CSR MUST be set to the currently logged-in user ID.
-2. The client uploads the CSR to the server.
-   1. The client encodes the CSR using PEM encoding.
-   2. The client transmits the CSR as the URL-encoded `POST` parameter `csr` to the `/public-key` OCS API endpoint.
+2. The client uploads the PEM encoded CSR to the server to [create the public key](#create-public-key).
 3. The server MUST only issue a certificate if the `CN` matches the current user ID.
 4. The server returns the issued certificate.
 5. The client MUST verify that the certificate was signed by the server, using the previously fetched public key of the server.
@@ -410,26 +433,10 @@ When a device is initially added to an account the device MUST generate all rele
 
 In a second step, the private key is stored encrypted on the server to simplify the addition of further devices:
 
-1. The client generates a 12 word long mnemonic from the English `BIP-0039` word list. The word list contains 2048 words, thus resulting in 2048^12 possible key combinations.
-2. The client encrypts the private key:
-   1. Encode the private key
-      - Using [PKCS#8 (RFC 5208)](https://tools.ietf.org/html/rfc5208#section-5) and PEM encoding
-      - Use Base64 to encode the resulting PEM
-   2. Generate the encryption key using a key derivation function (KDF) on the generated mnemonic
-      - KDF: PBKDF2 with HMAC-SHA256
-      - Iterations: 600000
-      - Salt: 40 randomly generated bytes
-   3. Encrypt the encoded private key using the encryption key
-      - AES/GCM/NoPadding
-      - 256 bit key size
-      - 96 bit nonce
-      - 128 bit authenticationTag, which is appended to the encrypted private key
-3. The client uploads the encrypted private key (including the authenticationTag), nonce and salt to the server:
-   1. key, salt, and nonce are Base64 encoded
-   2. Then concatenated using `|` as the separator (`{base64(key + authenticationTag)}|{base64(nonce)}|{base64(salt)}`)
-   3. This string is sent as the URL-encoded `POST` parameter `privateKey` to the `/private-key` OCS endpoint.
+1. The client generates a new mnemonic as described in [Cryptographic parameters](#cryptographic-parameters).
+2. The client encrypts the private key with the key derived from the mnemonic, as described in [Encrypted private key](#encrypted-private-key).
+3. The client uploads the encrypted private key to the server to [set the private key](#set-private-key).
 4. The client displays the mnemonic to the user as a space-separated text and asks the user to note it down in a secure place.
-   For encrypting and decrypting, the mnemonic MUST have no whitespace and MUST be lowercase.
 5. The client stores the mnemonic in the keychain of the device with spaces so it can be shown more readable.
 
 In case a user loses their device, they can recover by using the mnemonic passphrase.
@@ -440,18 +447,17 @@ On mobile devices, displaying the mnemonic MUST require the user to enter their 
 When a device is initially added to an account the device MUST upload the relevant key material for the user account to the server:
 
 1. The client discovers the certificate (and key pair) to use on the secure storage.
-2. The client uploads the certificate to the server using the `/public-key` OCS endpoint.
-3. The client MAY check the certificate of the server by using `GET` on the `/server-key` OCS endpoint.
+2. The client uploads the certificate to the server to [set the public key](#set-public-key).
+3. The client MAY check the certificate of the server by [getting the server key](#get-server-key).
 4. The client stores the certificate ID and enables the end-to-end encryption feature on the client.
 
 #### Further devices
 In case a certificate already exists for the user the client MUST download the existing private key:
 
-1. The client downloads the private key from the `/private-key` OCS endpoint.
-2. The client asks the user for the mnemonic and decrypts the private key using AES/GCM/NoPadding as cipher (256 bit key size) and PBKDF2WithHmacSHA256 as key derivation with 600000 iterations.
-   If the private key was uploaded with an older version of this protocol, the client MUST use the legacy parameters described in [Versioning and backward compatibility](#versioning-and-backward-compatibility).
+1. The client [gets the private key](#get-private-key).
+2. The client asks the user for the mnemonic and decrypts the private key, as described in [Encrypted private key](#encrypted-private-key).
 3. The client MUST check that the private key belongs to the previously downloaded certificate.
-4. The client MUST check that the certificate was signed by the server, using the server's public key from the `/server-key` OCS endpoint.
+4. The client MUST check that the certificate was signed by the server, using the [server key](#get-server-key).
 5. The client stores the private key in the keychain of the device.
 6. The client stores the mnemonic in the keychain of the device, it SHOULD be stored with spaces so it can be shown more readable.
 
@@ -472,144 +478,36 @@ During the migration the following steps MUST be performed:
   - signs the metadata file with the new user certificate
 
 On demand certificate migration MAY be used as a fallback.
-For every metadata update, the client MUST follow the process described in [Update metadata file](#update-metadata-file).
+For every metadata update, the client MUST follow the process described in [Locking](#locking).
 
 ### Creating an end-to-end encrypted folder
-To create an end-to-end encrypted folder multiple steps have to be performed.
-Data access to such folders happens via the regular WebDAV API available at `/remote.php/dav/{userId}/files`.
+To create an end-to-end encrypted folder the client MUST:
 
-#### Mark folder as end-to-end encrypted
-After creating a folder via WebDAV the client MUST flag the folder as end-to-end encrypted,
-by sending a `PUT` request to the `/encrypted/<folder-id>` OCS endpoint where `<folder-id>` is the folder ID indicated by the WebDAV API.
+1. Create the folder via [WebDAV](#webdav).
+2. [Mark the folder as encrypted](#mark-folder-as-encrypted).
+3. [Lock](#locking) the folder, in case of a subfolder the lock of the parent folder is used.
+4. Create the [initial metadata](#initial-metadata) by [creating the metadata](#create-metadata).
+5. Unlock the folder.
 
-Once this flag has been set the folder is only accessible by clients supporting end-to-end encryption, regular WebDAV clients cannot access it anymore.
+Once the encryption flag has been set the folder is only accessible by clients supporting end-to-end encryption, regular WebDAV clients cannot access it anymore.
 Only empty folders can be marked as end-to-end encrypted.
 Once a folder is marked as encrypted, it MUST NOT be marked as unencrypted again.
 
-#### Create metadata file
-The client MUST create the [initial metadata](#initial-metadata) by sending a `POST` request to the `/meta-data/<folder-id>` OCS API endpoint, where `<folder-id>` is the folder ID indicated by the WebDAV API.
-- The encrypted metadata MUST be sent as the URL-encoded `metaData` parameter.
-- The metadata signature MUST be sent as the `X-NC-E2EE-SIGNATURE` HTTP header (see [Signing the metadata](#signing-the-metadata)).
-- The lock token MUST be sent as the `e2e-token` HTTP header.
-  Thus the folder MUST be locked before creating the metadata, in case of a subfolder the lock of the parent folder is used
-  (see [Uploading payload and metadata file](#uploading-payload-and-metadata-file)).
-
-If metadata already exists for the folder, the server MUST respond with HTTP status code 409 Conflict.
-
-#### Update metadata file
-Every update of the metadata file MUST be done while the folder is locked.
-The client locks the folder, uploads the changed files and the updated metadata file and finally unlocks the folder.
-The required requests are described in [Uploading payload and metadata file](#uploading-payload-and-metadata-file).
-
-### Modifying content of an end-to-end encrypted folder
-The following steps are REQUIRED to create, update or delete files of an end-to-end encrypted folder.
-If any of the following steps fail, the client MUST show a verbose warning to the user, unlock the folder and abort.
-
-1. Make a backup of the file to be modified and the metadata file, so that in case of any upload problems the client can revert to a consistent state.
-2. Detect the topmost folder which needs to be changed
-   1. Increase the counter of the metadata of this folder
-   2. Lock the folder with the increased counter passed as `X-NC-E2EE-COUNTER` header
-3. Check for changes in the encrypted folder.
-   1. If the current version is up to date, go to step 4.
-   2. If not current,
-      - get the latest metadata file
-      - verify the metadata file
-      - decrypt the metadata file
-      - check if the file operation is still possible (e.g. the file to be renamed can already be deleted)
-4. Perform the specific steps to create/update/delete the file or folder:
-    * Create new file:
-      1. Generate a new 128-bit file-key for the file
-      2. Generate a new 96-bit IV for the file
-      3. Encrypt the file using the key and IV with AES/GCM/NoPadding
-      4. Create a new random identifier
-      5. Add the new file to the files array in the metadata file with the random identifier as key and
-         - filename
-         - encryption key
-         - nonce
-         - authenticationTag
-         - mimetype
-    * Rename existing file:
-      1. Change the filename in the files array, the encrypted file remains unchanged.
-    * Update existing file:
-      1. Generate a new 128-bit file-key for the file
-      2. Generate a new 96-bit IV for the file
-      3. Encrypt the file using the key and IV with AES/GCM/NoPadding
-      4. Upload the encrypted file via WebDAV using the existing random identifier
-      5. Update the file in the files array of the metadata with the updated
-         - key
-         - IV
-         - authenticationTag
-    * Delete file:
-      1. Remove the corresponding entry from the files array
-    * Move file into subfolder:
-      1. Remove the file from the files array in the metadata file of the source folder and add it to the files array of the metadata of the target folder
-      2. Perform steps 6-8 (encrypt, sign and upload the metadata) for the source and the target folder
-    * Copy file into subfolder:
-      1. Same as creating a new file, to prevent having the same encryption key and nonce for two different files
-    * Create new subfolder:
-      1. Create a new random identifier
-      2. Add the folder to the folders array in the metadata file
-    * Rename existing subfolder:
-      1. Change the name in the folders array, the encrypted subfolder remains unchanged
-    * Delete subfolder:
-      1. Remove the corresponding entry from the folders array
-      2. Delete the metadata of the subfolder by sending a `DELETE` request to the `/meta-data/<folder-id>` OCS endpoint
-    * Move subfolder into another subfolder:
-      1. Remove the folder from the folders array in the metadata file of the source folder and add it to the folders array of the metadata of the target folder
-      2. Perform steps 6-8 (encrypt, sign and upload the metadata) for the source and the target folder
-      3. Move the encrypted subfolder using a WebDAV `MOVE` request, the subfolder keeps its random identifier
-    * Copy subfolder into another subfolder:
-      1. Recursively add new folders and new files, everything MUST be re-encrypted to prevent having the same encryption key and nonce for two different files
-      2. Perform steps 6-8 (encrypt, sign and upload the metadata) for every source and target folder
-
-      _**Note:** As everything needs to be re-encrypted, this operation can be expensive for large folders, e.g. on mobile devices._
-    * Delete topmost encrypted folder:
-      1. Set `deleted` to `true` in the metadata
-      2. Empty the files and folders array
-5. Upload the modified or new encrypted file or folder, or delete the file or folder via WebDAV
-6. Encrypt the metadata using the metadata-key
-7. Sign the metadata as described in [Signing the metadata](#signing-the-metadata)
-8. Upload the encrypted metadata
-9. Unlock the folder
-
-#### Uploading payload and metadata file
-To keep the metadata and the file in sync locking is REQUIRED.
-The client MUST lock the topmost encrypted (sub-)folder which needs to be changed and pass the incremented counter as header.
+### Locking
+To keep the metadata and the files in sync locking is REQUIRED for every modification of an encrypted folder.
+The client MUST [lock](#lock-folder) the topmost encrypted (sub-)folder which needs to be changed, passing the incremented counter.
 The lock also covers all subfolders of the locked folder.
-The server MUST check that the incremented counter is greater than the counter of the last lock of this folder, if not it MUST fail with HTTP status code 412 Precondition Failed.
-If the folder (or one of its parent folders) is already locked, the server MUST respond with HTTP status code 423 Locked.
-If the lock operation succeeded, the server responds with HTTP status code 200 together with a lock token in the response body.
+
 In case the client lost connection after locking the folder, it MAY restart the operation later with another lock request.
 In this case the client MUST send the lock token with the new lock request.
 This enables the server to decide if the client is allowed to retry the upload.
 
 After locking was successful, the client
-- uploads the encrypted file
-- uploads the metadata file with the signature as header
+- uploads the encrypted file via [WebDAV](#webdav)
+- [updates the metadata](#update-metadata)
 
-After both files are uploaded successfully the client finishes the operation by sending an unlock request.
+After both are uploaded successfully the client finishes the operation by [unlocking](#unlock-folder) the folder.
 All changes done while the folder is locked are only applied by the server when the folder is unlocked.
-
-The `<folder-id>` denotes the ID of the end-to-end encrypted folder given by the WebDAV API.
-
-To lock the folder the client MUST send a `POST` request to the `/lock/<folder-id>` endpoint.
-- The incremented counter MUST be sent as the `X-NC-E2EE-COUNTER` HTTP header.
-- To reuse an existing lock token it MUST be sent as the `e2e-token` parameter.
-- The server returns the lock token as the `e2e-token` key of the response data.
-
-All WebDAV requests modifying the content of a locked folder (e.g. `PUT`, `MKCOL`, `MOVE`, `COPY` or `DELETE`) MUST include the lock token as the `e2e-token` HTTP header.
-
-To update the metadata the client MUST send a `PUT` request to the `/meta-data/<folder-id>` endpoint.
-- The computed signature MUST be sent as the `X-NC-E2EE-SIGNATURE` HTTP header.
-- The current lock token MUST be sent as the `e2e-token` HTTP header.
-- The encrypted metadata JSON MUST be sent as the URL-encoded `metaData` parameter.
-
-If the folder is not locked with the given token, the server MUST respond with HTTP status code 412 Precondition Failed.
-
-To unlock the folder the client MUST send a `DELETE` request to `/lock/<folder-id>`.
-- The previously received lock token MUST be sent as the `e2e-token` HTTP header.
-- To discard all changes done while the folder was locked, the client MAY send the parameter `abort` with the value `true`.
-  The server then reverts the changes to the state before the folder was locked.
 
 If unlocking fails, the client MUST retry or abort the operation so that the folder is again in an unlocked and consistent state.
 
@@ -622,11 +520,69 @@ _This section is informative._
 - `/enc/folderA/test` shall be moved into `/enc/folderB/`
   - the topmost folder to change is in that case `/enc`, so this needs to be locked, thus the complete encrypted directory is locked
 
+### Modifying content of an end-to-end encrypted folder
+The following steps are REQUIRED to create, update or delete files of an end-to-end encrypted folder.
+If any of the following steps fail, the client MUST show a verbose warning to the user, unlock the folder and abort.
+
+1. Make a backup of the file to be modified and the metadata file, so that in case of any upload problems the client can revert to a consistent state.
+2. Detect the topmost folder which needs to be changed
+   1. Increase the counter of the metadata of this folder
+   2. [Lock](#locking) the folder with the increased counter
+3. Check for changes in the encrypted folder.
+   1. If the current version is up to date, go to step 4.
+   2. If not current,
+      - get the latest metadata file
+      - verify the metadata file
+      - decrypt the metadata file
+      - check if the file operation is still possible (e.g. the file to be renamed can already be deleted)
+4. Perform the specific steps to create/update/delete the file or folder:
+    * Create new file:
+      1. Generate a new file-key and encrypt the file as described in [Encrypting data](#encrypting-data)
+      2. Create a new [random identifier](#random-identifiers)
+      3. Add a new [file entry](#file-entry) to the files array of the metadata, using the random identifier as key
+    * Rename existing file:
+      1. Change the filename in the files array, the encrypted file remains unchanged.
+    * Update existing file:
+      1. Generate a new file-key and encrypt the file as described in [Encrypting data](#encrypting-data)
+      2. Upload the encrypted file via WebDAV using the existing random identifier
+      3. Update the key, nonce and authenticationTag of the [file entry](#file-entry)
+    * Delete file:
+      1. Remove the corresponding entry from the files array
+    * Move file into subfolder:
+      1. Remove the file from the files array in the metadata file of the source folder and add it to the files array of the metadata of the target folder
+      2. Perform steps 6-8 (encrypt, sign and upload the metadata) for the source and the target folder
+    * Copy file into subfolder:
+      1. Same as creating a new file
+    * Create new subfolder:
+      1. Create a new [random identifier](#random-identifiers)
+      2. Add the folder to the folders array in the metadata file
+    * Rename existing subfolder:
+      1. Change the name in the folders array, the encrypted subfolder remains unchanged
+    * Delete subfolder:
+      1. Remove the corresponding entry from the folders array
+      2. [Delete the metadata](#delete-metadata) of the subfolder
+    * Move subfolder into another subfolder:
+      1. Remove the folder from the folders array in the metadata file of the source folder and add it to the folders array of the metadata of the target folder
+      2. Perform steps 6-8 (encrypt, sign and upload the metadata) for the source and the target folder
+      3. Move the encrypted subfolder using a WebDAV `MOVE` request, the subfolder keeps its random identifier
+    * Copy subfolder into another subfolder:
+      1. Recursively add new folders and new files, everything MUST be re-encrypted as described in [Encrypting data](#encrypting-data)
+      2. Perform steps 6-8 (encrypt, sign and upload the metadata) for every source and target folder
+
+      _**Note:** As everything needs to be re-encrypted, this operation can be expensive for large folders, e.g. on mobile devices._
+    * Delete topmost encrypted folder:
+      1. Set `deleted` to `true` in the metadata
+      2. Empty the files and folders array
+5. Upload the modified or new encrypted file or folder, or delete the file or folder via [WebDAV](#webdav)
+6. [Encrypt the metadata](#encrypting-the-metadata) using the metadata-key
+7. [Sign the metadata](#signing-the-metadata)
+8. [Update the metadata](#update-metadata)
+9. [Unlock](#unlock-folder) the folder
+
 ### Accessing content of an end-to-end encrypted folder
 
 #### Encrypted folder gets added
-- The WebDAV endpoint lists the folder with the `{http://nextcloud.org/ns}is-encrypted` property set to `1`.
-  The metadata of the folder is also available as `{http://nextcloud.org/ns}e2ee-metadata` WebDAV property.
+- The [WebDAV](#webdav) endpoint lists the folder as encrypted.
 - The client SHOULD show a lock symbol when listing the folder.
 - The client MUST refuse to update the encryption status to false as this is not allowed.
   If the server sends such an information the client MUST warn the user.
@@ -634,7 +590,7 @@ _This section is informative._
 
 #### Encrypted folder gets deleted
 If the WebDAV endpoint does not list an encrypted folder anymore, the client MUST check if this is a valid delete.
-Therefore, the client MUST request the metadata using a `GET` request to the `/meta-data/<folder-id>` OCS endpoint, validate the metadata file and check if `deleted` is set to `true`.
+Therefore, the client MUST [get the metadata](#get-metadata), validate the metadata file and check if `deleted` is set to `true`.
 Otherwise, the client MUST display a warning that the folder was maliciously deleted and MUST refuse to delete the locally synced content.
 
 #### Accessing encrypted files
@@ -644,37 +600,27 @@ The client MAY then present the currently stored files alongside with a warning 
 To access encrypted files the client MUST perform the following steps:
 
 1. Check for changes in the encrypted folder.
-   If not current, download the latest metadata file of the encrypted folder.
-2. Verify the metadata file as described in [Verifying the metadata](#verifying-the-metadata)
-3. Decrypt the metadata file using the metadata-key of the topmost encrypted folder
-4. Look up the file-metadata of the files in the `files` array of the decrypted metadata
+   If not current, [get the latest metadata](#get-metadata) of the encrypted folder.
+2. [Verify the metadata](#verifying-the-metadata)
+3. [Decrypt the metadata](#encrypting-the-metadata) using the metadata-key of the topmost encrypted folder
+4. Look up the [file entries](#file-entry) in the `files` array of the decrypted metadata
 5. Download the referenced files by their random identifier using WebDAV
-6. Decrypt the file
-    1. Get the key from the metadata file
-    2. Get the IV from the metadata file
-    3. Get the authenticationTag from the metadata file
-    4. Decrypt using AES/GCM/NoPadding (128bit) using the key and IV
-    5. Validate decryption using authenticationTag
+6. Decrypt the files using the key, nonce and authenticationTag of the file entry and validate the authenticationTag
 
 In case a file is referenced in the metadata but cannot be found on the WebDAV file system the client SHOULD warn the user.
 If the file exists locally but not on the WebDAV file system the client SHOULD re-upload the file.
 In case the number of files referenced in the encrypted metadata differs from the number of files on the file system, the client SHOULD display a warning to the user.
 
 ### Migrating filedrop
-Files added via secure file drop are added to the filedrop array, e.g. via the web browser.
+Files added via secure file drop are added to the filedrop array, e.g. via the web browser, by [adding filedrop entries](#add-filedrop-entries).
 The filedrop-key, similar to the metadata-key, is encrypted to all users of this folder, so that all users that have access can migrate.
-
-To add entries to the filedrop array a `PUT` request to the `/meta-data/<folder-id>/filedrop` OCS endpoint MUST be sent.
-- The new entries MUST be sent as the URL-encoded `filedrop` parameter, a JSON object mapping the random identifiers to the encrypted entries.
-- The server merges the new entries into the filedrop array of the metadata.
-- No lock token is required and the counter is not changed, as the filedrop array is not part of the signed metadata.
 
 As soon as a client downloads a metadata file and finds a non-empty filedrop array, it MUST:
 
-1. lock the folder
+1. [lock](#locking) the folder
 2. move each file from the filedrop array to the files array
 3. empty the filedrop array
-4. upload the updated metadata file
+4. [update the metadata](#update-metadata)
 5. unlock the folder
 
 This MUST be done even when there is no actual change on other files, so e.g. when listing files, refreshing folders, etc.
@@ -689,7 +635,7 @@ The clients MUST do the following when trying to establish a trust relationship 
 1. Check if a certificate for the specified user ID is already downloaded (Trust On First Use (TOFU))
    1. If a certificate is available, it MUST be used
    2. If none is available, the client continues at 2.
-2. Query the user certificate by sending a `GET` request to the `/public-key` endpoint with a JSON encoded `users` parameter containing the specified user IDs
+2. [Get the public key](#get-public-keys) of the user
 3. If the user has not yet set up end-to-end encryption and thus has no public key, it is not possible to share with the user.
    A warning SHOULD then be shown.
 4. Verify that the certificate is issued by the downloaded server public key.
@@ -702,13 +648,10 @@ To create a share the following actions MUST be performed:
 
 1. The folder is shared via the [OCS sharing](https://docs.nextcloud.com/server/latest/developer_manual/client_apis/OCS/ocs-share-api.html) API to the recipient
 2. Generate a new metadata-key
-3. Add the recipient to the users array with
-   - userId
-   - certificate
-4. Add or replace the new metadata-key of every user in the users array.
-   The metadata-key is encrypted with the user's public key.
-5. Add the SHA-256 hash of the metadata-key to the keyChecksums array.
-6. Encrypt the metadata of all subfolders with the new metadata-key and upload it.
+3. Add the recipient to the users array
+4. Add or replace the new metadata-key of every user in the users array, wrapped with the user's public key.
+5. Add the hash of the metadata-key to the keyChecksums array.
+6. Encrypt the metadata of all subfolders with the new metadata-key and update it.
 
 #### Remove someone from an existing share
 To remove someone from an existing share the following actions MUST be performed:
@@ -716,17 +659,16 @@ To remove someone from an existing share the following actions MUST be performed
 1. The folder is unshared via the [OCS sharing](https://docs.nextcloud.com/server/latest/developer_manual/client_apis/OCS/ocs-share-api.html) API
 2. Generate a new metadata-key
 3. Remove the recipient from the users array
-4. Add or replace the new metadata-key of every user in the users array.
-   The metadata-key is encrypted with the user's public key.
-5. Add the SHA-256 hash of the metadata-key to the keyChecksums array.
-6. Encrypt the metadata of all subfolders with the new metadata-key and upload it.
+4. Add or replace the new metadata-key of every user in the users array, wrapped with the user's public key.
+5. Add the hash of the metadata-key to the keyChecksums array.
+6. Encrypt the metadata of all subfolders with the new metadata-key and update it.
 
 ### Sharing to external users
 To share end-to-end encrypted files with users without a Nextcloud account,
 it is possible to create public shares with end-to-end encryption.
 For this the topmost encrypted folder MUST be shared with the Nextcloud sharing flow as a link share.
 Then a key pair MUST be generated as described for the initial device, with the following changes:
-- For the requests to the `/public-key` and `/private-key` endpoints the `shareToken` parameter,
+- When [creating the public key](#create-public-key) and [setting the private key](#set-private-key) the `shareToken` parameter,
   with the value of the token of the created share, MUST be included.
 - The `CN` of the certificate MUST be set to `s:SHARE_TOKEN`,
   where `SHARE_TOKEN` is replaced with the token of the share.
@@ -740,21 +682,268 @@ and is stored on the server under the `s:SHARE_TOKEN` ID.
 The client SHOULD then provide the new mnemonic to the sharing user, who has to provide this information
 to the share recipient using a secure second channel.
 
-The share recipient MUST include the share token as the `X-NC-E2EE-SHARE-TOKEN` HTTP header in all OCS API requests,
-e.g. to download the private key, to lock the folder or to access the metadata.
-Only for adding filedrop entries the share token is sent as the `shareToken` parameter.
+The share recipient MUST include the share token as described in [General requirements](#general-requirements).
 
 ## HTTP API
+This section specifies all requests used by this protocol.
+
+### General requirements
 This protocol makes use of two different APIs:
 1. The [Nextcloud WebDAV](https://docs.nextcloud.com/server/latest/developer_manual/client_apis/WebDAV/index.html) API
 2. The `end_to_end_encryption` [OCS](https://www.open-collaboration-services.org/) API
 
-When an OCS API endpoint is mentioned then this document uses the `v2` endpoint of OCS provided by Nextcloud.
-So that all OCS requests share the same base URL:
+All OCS endpoints in this document are relative to the following base URL, using the `v2` endpoint of OCS provided by Nextcloud:
 
 - `/ocs/v2.php/apps/end_to_end_encryption/api/v{VERSION}`
 
 Where `{VERSION}` is the major version of the current metadata version.
+
+The following requirements apply to all requests:
+- The server only allows clients supporting end-to-end encryption to access encrypted folders and the OCS API.
+  Clients are identified by their user agent or by the `X-E2EE-SUPPORTED: true` HTTP header, clients SHOULD send this header.
+- Parameters MUST be sent URL-encoded.
+- `<folder-id>` denotes the ID of the encrypted folder given by the WebDAV API.
+- The response data of OCS requests is contained in the `ocs.data` key of the OCS response.
+- A share recipient accessing a [public share](#sharing-to-external-users) MUST include the share token as the `X-NC-E2EE-SHARE-TOKEN` HTTP header in all OCS requests,
+  except for [adding filedrop entries](#add-filedrop-entries).
+
+### Endpoint overview
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/public-key` | [Get public keys](#get-public-keys) |
+| `POST` | `/public-key` | [Create public key](#create-public-key) |
+| `PUT` | `/public-key` | [Set public key](#set-public-key) |
+| `GET` | `/private-key` | [Get private key](#get-private-key) |
+| `POST` | `/private-key` | [Set private key](#set-private-key) |
+| `GET` | `/server-key` | [Get server key](#get-server-key) |
+| `PUT` | `/encrypted/<folder-id>` | [Mark folder as encrypted](#mark-folder-as-encrypted) |
+| `POST` | `/lock/<folder-id>` | [Lock folder](#lock-folder) |
+| `DELETE` | `/lock/<folder-id>` | [Unlock folder](#unlock-folder) |
+| `GET` | `/meta-data/<folder-id>` | [Get metadata](#get-metadata) |
+| `POST` | `/meta-data/<folder-id>` | [Create metadata](#create-metadata) |
+| `PUT` | `/meta-data/<folder-id>` | [Update metadata](#update-metadata) |
+| `DELETE` | `/meta-data/<folder-id>` | [Delete metadata](#delete-metadata) |
+| `PUT` | `/meta-data/<folder-id>/filedrop` | [Add filedrop entries](#add-filedrop-entries) |
+
+_**Note:** The server additionally provides endpoints to remove the encryption flag of a folder and to remove all encrypted folders of a user, e.g. to reset the end-to-end encryption of a user. They are not part of this protocol._
+
+### Key endpoints
+
+#### Get public keys
+`GET /public-key`
+
+| Parameter | Description |
+|-----------|-------------|
+| `users` | JSON encoded list of user IDs. The current user is always included. |
+
+Response data: `public-keys`, an object mapping the user IDs to their PEM encoded certificates.
+
+Errors:
+- 404 Not Found: no certificate exists for at least one of the users
+
+#### Create public key
+`POST /public-key`
+
+| Parameter | Description |
+|-----------|-------------|
+| `csr` | The PEM encoded CSR. |
+| `shareToken` | (optional) The share token, when creating the certificate of a [share user](#sharing-to-external-users). |
+
+Response data: `public-key`, the PEM encoded certificate issued by the server.
+
+Errors:
+- 403 Forbidden: the `CN` does not match the current user ID, or `s:SHARE_TOKEN` of a share owned by the current user
+- 409 Conflict: a certificate already exists
+
+#### Set public key
+`PUT /public-key`
+
+Used to store a certificate issued by an external certificate authority.
+
+| Parameter | Description |
+|-----------|-------------|
+| `publicKey` | The PEM encoded certificate, the `CN` MUST match the current user ID. |
+
+Response data: `public-key`, the stored certificate.
+
+Errors:
+- 400 Bad Request: invalid certificate or the `CN` does not match the current user ID
+- 409 Conflict: a certificate already exists
+
+#### Get private key
+`GET /private-key`
+
+Response data: `private-key`, the [encrypted private key](#encrypted-private-key).
+
+Errors:
+- 403 Forbidden: access is not allowed
+- 404 Not Found: no private key exists
+
+#### Set private key
+`POST /private-key`
+
+| Parameter | Description |
+|-----------|-------------|
+| `privateKey` | The [encrypted private key](#encrypted-private-key). |
+| `shareToken` | (optional) The share token, when setting the private key of a [share user](#sharing-to-external-users). |
+
+Response data: `private-key`, the stored encrypted private key.
+
+Errors:
+- 400 Bad Request: invalid format, i.e. not three parts, a nonce not of 12 bytes or a salt not of 40 bytes
+- 409 Conflict: a private key already exists
+
+#### Get server key
+`GET /server-key`
+
+Response data: `public-key`, the PEM encoded public key of the server, used to verify the certificates issued by the server.
+
+### Encryption endpoints
+
+#### Mark folder as encrypted
+`PUT /encrypted/<folder-id>`
+
+Sets the encryption flag of an empty folder.
+
+Errors:
+- 403 Forbidden: setting the flag is not allowed
+- 404 Not Found: the folder does not exist
+
+### Lock endpoints
+
+#### Lock folder
+`POST /lock/<folder-id>`
+
+| Header | Description |
+|--------|-------------|
+| `X-NC-E2EE-COUNTER` | The incremented counter of the metadata. |
+
+| Parameter | Description |
+|-----------|-------------|
+| `e2e-token` | (optional) An existing lock token, to restart an interrupted operation. |
+
+Response data: `e2e-token`, the lock token.
+
+The server MUST check that the counter is greater than the counter of the last lock of this folder.
+
+Errors:
+- 400 Bad Request: the counter is missing
+- 403 Forbidden: locking is not allowed
+- 412 Precondition Failed: the counter is not greater than the counter of the last lock
+- 423 Locked: the folder or one of its parent folders is already locked
+
+#### Unlock folder
+`DELETE /lock/<folder-id>`
+
+| Header | Description |
+|--------|-------------|
+| `e2e-token` | The lock token. |
+
+| Parameter | Description |
+|-----------|-------------|
+| `abort` | (optional) If `true`, all changes done while the folder was locked are discarded and the server reverts the folder to the state before it was locked. |
+
+Errors:
+- 400 Bad Request: the lock token is missing
+- 403 Forbidden: the folder is locked with a different lock token
+- 404 Not Found: the folder is not locked
+
+### Metadata endpoints
+
+#### Get metadata
+`GET /meta-data/<folder-id>`
+
+No locking is required.
+
+Response data: `meta-data`, the [metadata file](#metadata-file).
+
+| Response header | Description |
+|-----------------|-------------|
+| `X-NC-E2EE-SIGNATURE` | The [signature](#signing-the-metadata) of the metadata. |
+
+Errors:
+- 403 Forbidden: access is not allowed
+- 404 Not Found: no metadata exists
+
+#### Create metadata
+`POST /meta-data/<folder-id>`
+
+| Header | Description |
+|--------|-------------|
+| `e2e-token` | The lock token. |
+| `X-NC-E2EE-SIGNATURE` | The [signature](#signing-the-metadata) of the metadata. |
+
+| Parameter | Description |
+|-----------|-------------|
+| `metaData` | The [metadata file](#metadata-file). |
+
+Errors:
+- 400 Bad Request: the lock token or the signature is missing
+- 403 Forbidden: access is not allowed or the folder is not locked with the lock token
+- 409 Conflict: metadata already exists
+
+#### Update metadata
+`PUT /meta-data/<folder-id>`
+
+| Header | Description |
+|--------|-------------|
+| `e2e-token` | The lock token. |
+| `X-NC-E2EE-SIGNATURE` | The [signature](#signing-the-metadata) of the metadata. |
+
+| Parameter | Description |
+|-----------|-------------|
+| `metaData` | The [metadata file](#metadata-file). |
+
+Errors:
+- 400 Bad Request: the lock token or the signature is missing
+- 403 Forbidden: access is not allowed
+- 404 Not Found: no metadata exists
+- 412 Precondition Failed: the folder is not locked with the lock token
+
+#### Delete metadata
+`DELETE /meta-data/<folder-id>`
+
+| Header | Description |
+|--------|-------------|
+| `e2e-token` | The lock token. |
+
+Errors:
+- 400 Bad Request: the lock token is missing
+- 403 Forbidden: access is not allowed
+- 404 Not Found: no metadata exists
+- 412 Precondition Failed: the folder is not locked with the lock token
+
+#### Add filedrop entries
+`PUT /meta-data/<folder-id>/filedrop`
+
+| Parameter | Description |
+|-----------|-------------|
+| `filedrop` | JSON object mapping [random identifiers](#random-identifiers) to [filedrop entries](#filedrop-entry). |
+| `shareToken` | (optional) The share token, when adding entries as recipient of a public share. |
+
+The server merges the new entries into the filedrop array of the metadata.
+No lock token is required and the counter is not changed, as the filedrop array is not part of the signed metadata.
+
+Response data: `filedrop`, the added entries.
+
+Errors:
+- 403 Forbidden: adding entries is not allowed
+- 404 Not Found: no metadata exists
+- 412 Precondition Failed: the folder is locked
+
+### WebDAV
+Encrypted files and folders are accessed via the regular WebDAV API available at `/remote.php/dav/files/{userId}`, using their [random identifiers](#random-identifiers) as names.
+
+All WebDAV requests modifying the content of a locked folder (e.g. `PUT`, `MKCOL`, `MOVE`, `COPY` or `DELETE`) MUST include the lock token as the `e2e-token` HTTP header.
+
+The server provides the following WebDAV properties for folders:
+
+| Property | Description |
+|----------|-------------|
+| `{http://nextcloud.org/ns}is-encrypted` | `1` if the folder is end-to-end encrypted, `0` otherwise. |
+| `{http://nextcloud.org/ns}e2ee-metadata` | The [metadata file](#metadata-file) of an encrypted folder. |
+| `{http://nextcloud.org/ns}e2ee-metadata-signature` | The [signature](#signing-the-metadata) of the metadata of an encrypted folder. |
 
 ## Security considerations
 
@@ -834,7 +1023,7 @@ The `version` key of the metadata MUST be one of the following values:
 Clients MUST support both versions.
 Clients MUST NOT use metadata of an unsupported version.
 
-The major version of the metadata selects the version of the OCS API, see [HTTP API](#http-api).
+The major version of the metadata selects the version of the OCS API, see [General requirements](#general-requirements).
 
 ### Legacy private key encryption
 Private keys uploaded with an older version of this protocol use different key derivation parameters.
@@ -843,9 +1032,73 @@ If decrypting the private key with the current parameters fails, the client MUST
 2. PBKDF2WithHmacSHA1 as key derivation with 600000 iterations
 3. PBKDF2WithHmacSHA256 as key derivation with 600000 iterations
 
+### Legacy ciphertext format
+Some clients append a `|` and the Base64 encoded nonce to the `ciphertext` of the encrypted metadata.
+Clients MUST ignore a `|` and everything following it when decrypting the `ciphertext`.
+
 ### Version 1
 Version 1 of this protocol is specified in [RFC_v1.md](./RFC_v1.md).
 Metadata with a version `"1.7"` was only used as an internal prototype of version 2.0 for file drop support.
+
+## Appendix: Examples
+_This section is informative._
+
+Metadata file of a topmost encrypted folder with one filedrop entry:
+
+```json
+{
+  "metadata": {
+    "ciphertext": "<base64 of the encrypted metadata with appended authenticationTag>",
+    "nonce": "<base64 of the nonce>",
+    "authenticationTag": "<base64 of the authenticationTag>"
+  },
+  "users": [
+    {
+      "userId": "alice",
+      "certificate": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n",
+      "encryptedMetadataKey": "<base64 of the wrapped metadata-key>"
+    }
+  ],
+  "filedrop": {
+    "9f2a61c4a8b84fb0a3cd1e0b5c7d2e41": {
+      "ciphertext": "<base64 of the encrypted file entry with appended authenticationTag>",
+      "nonce": "<base64 of the nonce>",
+      "authenticationTag": "<base64 of the authenticationTag>",
+      "users": [
+        {
+          "userId": "alice",
+          "encryptedFiledropKey": "<base64 of the wrapped filedrop-key>"
+        }
+      ]
+    }
+  },
+  "version": "2.0"
+}
+```
+
+Decrypted metadata:
+
+```json
+{
+  "keyChecksums": [
+    "9c56cc51b374c3ba189210d5b6d4bf57790d351c96c47c02190ecf1e430635ab"
+  ],
+  "deleted": false,
+  "counter": 12,
+  "folders": {
+    "1c0a8b9f2e7d4c3b8a6f5e4d3c2b1a09": "Documents"
+  },
+  "files": {
+    "4e3b2a1f0e9d8c7b6a5f4e3d2c1b0a98": {
+      "filename": "test.txt",
+      "mimetype": "text/plain",
+      "key": "<base64 of the file-key>",
+      "nonce": "<base64 of the nonce>",
+      "authenticationTag": "<base64 of the authenticationTag>"
+    }
+  }
+}
+```
 
 ## Appendix: Possible extensions
 _This section is informative._
