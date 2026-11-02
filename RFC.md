@@ -590,7 +590,8 @@ If unlocking fails, the client has to make sure that it retries or aborts the op
 
 #### Detect encrypted folder
 ##### Encrypted folder gets added
-- WebDAV endpoints lists folder with parameter encryption set to true
+- WebDAV endpoint lists folder with the `{http://nextcloud.org/ns}is-encrypted` property set to `1`
+  - the metadata of the folder is also available as `{http://nextcloud.org/ns}e2ee-metadata` WebDAV property
 - client shows lock symbol when listing folder
 - client refuses to update encryption status to false as this is not allowed.
   If server sends such an information the client has to warn the user.
