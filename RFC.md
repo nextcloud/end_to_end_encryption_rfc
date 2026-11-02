@@ -51,14 +51,9 @@ In addition, we will also make sure to validate our approach on time by external
   * [Signing the metadata](#signing-the-metadata)
   * [Verifying the metadata](#verifying-the-metadata)
 * [Protocol procedures](#protocol-procedures)
-  * [Adding an end-to-end encrypted device](#adding-an-end-to-end-encrypted-device)
-  * [Creating an end-to-end encrypted folder](#creating-an-end-to-end-encrypted-folder)
-  * [Locking](#locking)
-  * [Modifying content of an end-to-end encrypted folder](#modifying-content-of-an-end-to-end-encrypted-folder)
-  * [Accessing content of an end-to-end encrypted folder](#accessing-content-of-an-end-to-end-encrypted-folder)
-  * [Migrating filedrop](#migrating-filedrop)
-  * [Sharing encrypted folders to other users](#sharing-encrypted-folders-to-other-users)
-  * [Sharing to external users](#sharing-to-external-users)
+  * [User key lifecycle](#user-key-lifecycle)
+  * [Folder lifecycle](#folder-lifecycle)
+  * [Membership](#membership)
 * [HTTP API](#http-api)
   * [General requirements](#general-requirements)
   * [Endpoint overview](#endpoint-overview)
@@ -259,7 +254,7 @@ The metadata file is a JSON object with the following keys:
 |-----|------|----------|-------------|
 | `metadata` | [Encrypted payload](#encrypted-payload) | yes | The encrypted [metadata](#metadata) of the folder. |
 | `users` | array of [User](#user) | topmost encrypted folder only | All users with access to the folder, including the owner. MUST be present for topmost encrypted folders and MUST NOT be present for subfolders. |
-| `filedrop` | object mapping [random identifiers](#random-identifiers) to [Filedrop entries](#filedrop-entry) | no | Files added via secure file drop, which have not been migrated yet, see [Migrating filedrop](#migrating-filedrop). |
+| `filedrop` | object mapping [random identifiers](#random-identifiers) to [Filedrop entries](#filedrop-entry) | no | Files added via secure file drop, which have not been migrated yet, see [Ingesting filedrop entries](#ingesting-filedrop-entries). |
 | `version` | string | yes | The metadata version, see [Versioning and backward compatibility](#versioning-and-backward-compatibility). |
 
 In case the central data recovery key is enabled the metadata MUST also be encrypted towards the server's central data recovery key.
@@ -277,7 +272,7 @@ An encrypted payload holds data encrypted as described in [Encrypting data](#enc
 ### User
 | Key | Type | Required | Description |
 |-----|------|----------|-------------|
-| `userId` | string | yes | The user ID, or `s:SHARE_TOKEN` for a [share user](#sharing-to-external-users). |
+| `userId` | string | yes | The user ID, or `s:SHARE_TOKEN` for a [share user](#sharing-with-external-users). |
 | `certificate` | string | yes | The PEM encoded X.509 certificate of the user. |
 | `encryptedMetadataKey` | string | yes | The metadata-key, wrapped with the public key of the user (see [Cryptographic parameters](#cryptographic-parameters)), Base64 encoded. |
 
@@ -412,277 +407,404 @@ If any of the following checks fail, the client MUST refuse further sync and inf
 - the certificates of all users MUST be issued by the CA
 
 ## Protocol procedures
+The procedures are grouped by the lifecycle of the object they act on: the [key material of a user](#user-key-lifecycle), an [encrypted folder](#folder-lifecycle) and the [members of an encrypted folder](#membership).
 
-### Adding an end-to-end encrypted device
-As a first step, a device has to be added to an account.
-Depending on whether an end-to-end encrypted device already has been added to an account, the device MUST either create new key material or use existing key material.
+Every procedure is specified using the same structure:
+- **Preconditions**: the state that MUST be given before the procedure is started.
+- **Steps**: the steps the client MUST perform in the given order.
+- **Postconditions**: the state after the procedure was completed successfully.
+- **Failure handling**: what the client MUST do if a step fails.
 
-To check whether a certificate has already been issued, the client SHOULD [get the public keys](#get-public-keys).
-In addition, the client MUST [get the server key](#get-server-key) and MUST use it to verify the certificate chain in all future operations.
+### User key lifecycle
 
-#### Initial device
-When a device is initially added to an account the device MUST generate all relevant key material for the user account and provision it on the server:
+#### Setting up the initial device
+**Preconditions:**
+- No certificate exists for the user. The client SHOULD check this by [getting the public keys](#get-public-keys).
+- The server is trusted (TOFU).
 
-1. The client generates a new RSA key pair and a X.509 Certificate Signing Request (CSR), following [RFC 2986](https://datatracker.ietf.org/doc/html/rfc2986).
+**Steps:**
+1. [Get the server key](#get-server-key). The client MUST use it to verify the certificate chain in all future operations.
+2. Generate a new RSA key pair and a X.509 Certificate Signing Request (CSR), following [RFC 2986](https://datatracker.ietf.org/doc/html/rfc2986).
    The `CN` of the CSR MUST be set to the currently logged-in user ID.
-2. The client uploads the PEM encoded CSR to the server to [create the public key](#create-public-key).
-3. The server MUST only issue a certificate if the `CN` matches the current user ID.
-4. The server returns the issued certificate.
-5. The client MUST verify that the certificate was signed by the server, using the previously fetched public key of the server.
-6. The client stores the private key and the certificate in the keychain of the device.
+3. [Create the public key](#create-public-key) using the PEM encoded CSR.
+   The server MUST only issue a certificate if the `CN` matches the current user ID.
+4. Verify that the returned certificate was signed by the server, using the server key.
+5. Store the private key and the certificate in the keychain of the device.
+6. Generate a new mnemonic as described in [Cryptographic parameters](#cryptographic-parameters).
+7. Encrypt the private key with the key derived from the mnemonic, as described in [Encrypted private key](#encrypted-private-key).
+8. [Set the private key](#set-private-key) to store the encrypted private key on the server.
+9. Display the mnemonic to the user as a space-separated text and ask the user to note it down in a secure place.
+10. Store the mnemonic in the keychain of the device with spaces so it can be shown more readable.
 
-In a second step, the private key is stored encrypted on the server to simplify the addition of further devices:
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as Server
+    C->>S: GET /server-key
+    S-->>C: server public key
+    C->>C: generate key pair and CSR (CN = user ID)
+    C->>S: POST /public-key (csr)
+    S-->>C: certificate
+    C->>C: verify certificate with server public key
+    C->>C: generate mnemonic, encrypt private key
+    C->>S: POST /private-key (privateKey)
+    C->>C: show mnemonic to the user
+```
 
-1. The client generates a new mnemonic as described in [Cryptographic parameters](#cryptographic-parameters).
-2. The client encrypts the private key with the key derived from the mnemonic, as described in [Encrypted private key](#encrypted-private-key).
-3. The client uploads the encrypted private key to the server to [set the private key](#set-private-key).
-4. The client displays the mnemonic to the user as a space-separated text and asks the user to note it down in a secure place.
-5. The client stores the mnemonic in the keychain of the device with spaces so it can be shown more readable.
+**Postconditions:**
+- The certificate and the encrypted private key of the user are stored on the server.
+- Further devices can be added using the mnemonic, so in case a user loses their device, they can recover by using the mnemonic.
 
-In case a user loses their device, they can recover by using the mnemonic passphrase.
-The client MAY show the mnemonic passphrase in the client settings in case the user forgets their mnemonic.
+The client MAY show the mnemonic in the client settings in case the user forgets their mnemonic.
 On mobile devices, displaying the mnemonic MUST require the user to enter their PIN/fingerprint again.
 
-#### Initial device with hardware USB token storage of certificate
-When a device is initially added to an account the device MUST upload the relevant key material for the user account to the server:
+**Failure handling:**
+- If the certificate is not signed by the server, the client MUST NOT use it.
+- If a certificate or private key already exists (409 Conflict), the client SHOULD continue with [Adding a further device](#adding-a-further-device).
 
-1. The client discovers the certificate (and key pair) to use on the secure storage.
-2. The client uploads the certificate to the server to [set the public key](#set-public-key).
-3. The client MAY check the certificate of the server by [getting the server key](#get-server-key).
-4. The client stores the certificate ID and enables the end-to-end encryption feature on the client.
+#### Setting up the initial device with a hardware token
+**Preconditions:**
+- No certificate exists for the user.
+- A certificate (and its key pair) issued by an external certificate authority is stored on a hardware USB token.
 
-#### Further devices
-In case a certificate already exists for the user the client MUST download the existing private key:
+**Steps:**
+1. Discover the certificate (and key pair) to use on the secure storage.
+2. [Set the public key](#set-public-key) to store the certificate on the server.
+3. Optionally, [get the server key](#get-server-key) to check the certificate of the server.
+4. Store the certificate ID and enable the end-to-end encryption feature on the client.
 
-1. The client [gets the private key](#get-private-key).
-2. The client asks the user for the mnemonic and decrypts the private key, as described in [Encrypted private key](#encrypted-private-key).
-3. The client MUST check that the private key belongs to the previously downloaded certificate.
-4. The client MUST check that the certificate was signed by the server, using the [server key](#get-server-key).
-5. The client stores the private key in the keychain of the device.
-6. The client stores the mnemonic in the keychain of the device, it SHOULD be stored with spaces so it can be shown more readable.
+**Postconditions:**
+- The certificate of the user is stored on the server, the private key stays on the hardware token.
+
+**Failure handling:**
+- If a certificate already exists (409 Conflict), the certificate of the hardware token cannot be used for this user.
+
+#### Adding a further device
+**Preconditions:**
+- A certificate and an encrypted private key exist for the user.
+- The server is trusted (TOFU).
+
+**Steps:**
+1. [Get the server key](#get-server-key) and [get the public key](#get-public-keys) of the user.
+2. [Get the private key](#get-private-key).
+3. Ask the user for the mnemonic and decrypt the private key, as described in [Encrypted private key](#encrypted-private-key).
+   If the private key was uploaded with an older version of this protocol, the client MUST use the [legacy parameters](#legacy-private-key-encryption).
+4. Check that the private key belongs to the certificate.
+5. Check that the certificate was signed by the server, using the server key.
+6. Store the private key in the keychain of the device.
+7. Store the mnemonic in the keychain of the device, it SHOULD be stored with spaces so it can be shown more readable.
+
+**Postconditions:**
+- The device has access to all folders the user has access to.
+
+**Failure handling:**
+- If the private key cannot be decrypted, the client MAY ask the user for the mnemonic again.
+- If the private key does not belong to the certificate, or the certificate was not signed by the server, the client MUST NOT use the key material and SHOULD inform the user.
 
 #### Updating a user certificate
 A user certificate may expire or be revoked and renewed if needed.
 In such case, a migration is needed as the key pair changes and metadata-keys encrypted with the former public key are no longer accessible.
 
-The certificate migration is initiated by one client of the concerned user.
-During the migration the following steps MUST be performed:
-
-- All currently encrypted folders MUST be synced by the client that performs the certificate change or renewal before the migration is performed.
+**Preconditions:**
+- All currently encrypted folders MUST be synced by the client that performs the certificate change or renewal.
   The user interface of clients SHOULD block until this is done.
-- The client replaces the certificate that is currently stored on the server.
-- The client identifies all folders accessible by this user and for each of them:
-  - decrypts the metadata-key accessible by this user
-  - encrypts it with the new public key
-  - uploads the metadata file again with the new encrypted metadata-key and the new certificate (without the private key)
-  - signs the metadata file with the new user certificate
 
-On demand certificate migration MAY be used as a fallback.
-For every metadata update, the client MUST follow the process described in [Locking](#locking).
+**Steps:**
+1. Replace the certificate that is currently stored on the server.
+2. For every folder accessible by the user, perform a [change transaction](#change-transaction) which:
+   1. decrypts the metadata-key accessible by the user
+   2. wraps it with the new public key
+   3. replaces the encrypted metadata-key and the certificate of the user in the users array
+   4. signs the metadata with the new certificate
 
-### Creating an end-to-end encrypted folder
-To create an end-to-end encrypted folder the client MUST:
+**Postconditions:**
+- All folders accessible by the user can be decrypted using the new key pair.
 
-1. Create the folder via [WebDAV](#webdav).
+**Failure handling:**
+- On demand certificate migration MAY be used as a fallback for folders that could not be migrated.
+
+### Folder lifecycle
+
+#### Creating an encrypted folder
+**Preconditions:**
+- In case of a subfolder, the parent folder is locked by a [change transaction](#change-transaction), which adds the new folder to the folders array of the parent folder.
+
+**Steps:**
+1. Create the folder via [WebDAV](#webdav), using a new [random identifier](#random-identifiers) as name in case of a subfolder.
 2. [Mark the folder as encrypted](#mark-folder-as-encrypted).
-3. [Lock](#locking) the folder, in case of a subfolder the lock of the parent folder is used.
-4. Create the [initial metadata](#initial-metadata) by [creating the metadata](#create-metadata).
-5. Unlock the folder.
+3. In case of a topmost encrypted folder, [lock](#lock-folder) the folder.
+4. [Create the metadata](#create-metadata) with the [initial metadata](#initial-metadata), using the lock token of the folder, or of the parent folder in case of a subfolder.
+5. In case of a topmost encrypted folder, [unlock](#unlock-folder) the folder.
 
-Once the encryption flag has been set the folder is only accessible by clients supporting end-to-end encryption, regular WebDAV clients cannot access it anymore.
-Only empty folders can be marked as end-to-end encrypted.
-Once a folder is marked as encrypted, it MUST NOT be marked as unencrypted again.
+**Postconditions:**
+- The folder is only accessible by clients supporting end-to-end encryption, regular WebDAV clients cannot access it anymore.
+- The folder MUST NOT be marked as unencrypted again.
 
-### Locking
-To keep the metadata and the files in sync locking is REQUIRED for every modification of an encrypted folder.
-The client MUST [lock](#lock-folder) the topmost encrypted (sub-)folder which needs to be changed, passing the incremented counter.
-The lock also covers all subfolders of the locked folder.
+**Failure handling:**
+- Only empty folders can be marked as encrypted. If marking the folder fails, the client MUST NOT store any content in the folder.
+- If metadata already exists for the folder (409 Conflict), the client MUST NOT overwrite it.
 
-In case the client lost connection after locking the folder, it MAY restart the operation later with another lock request.
-In this case the client MUST send the lock token with the new lock request.
-This enables the server to decide if the client is allowed to retry the upload.
+#### Detecting an encrypted folder
+**Preconditions:**
+- The client lists a folder via [WebDAV](#webdav).
 
-After locking was successful, the client
-- uploads the encrypted file via [WebDAV](#webdav)
-- [updates the metadata](#update-metadata)
+**Steps:**
+1. Detect encrypted folders by the `{http://nextcloud.org/ns}is-encrypted` property.
+2. The client SHOULD show a lock symbol when listing an encrypted folder.
+3. Upon entering an encrypted folder, continue with [Reading an encrypted folder](#reading-an-encrypted-folder).
 
-After both are uploaded successfully the client finishes the operation by [unlocking](#unlock-folder) the folder.
-All changes done while the folder is locked are only applied by the server when the folder is unlocked.
+**Postconditions:**
+- The client knows the encryption status of the folder.
 
-If unlocking fails, the client MUST retry or abort the operation so that the folder is again in an unlocked and consistent state.
+**Failure handling:**
+- The client MUST refuse to update the encryption status of a known encrypted folder to unencrypted.
+  If the server reports such a change, the client MUST warn the user.
 
-#### Locking scope examples
-_This section is informative._
+#### Reading an encrypted folder
+**Preconditions:**
+- The client has access to the metadata-key of the topmost encrypted folder.
 
+No locking is required to read files of an encrypted folder.
+
+**Steps:**
+1. Check for changes in the encrypted folder.
+   If not current, [get the latest metadata](#get-metadata) of the encrypted folder.
+2. [Verify the metadata](#verifying-the-metadata).
+3. [Decrypt the metadata](#encrypting-the-metadata) using the metadata-key of the topmost encrypted folder.
+4. If the filedrop array is not empty, perform [Ingesting filedrop entries](#ingesting-filedrop-entries).
+5. Look up the [file entries](#file-entry) in the `files` array of the decrypted metadata.
+6. Download the referenced files by their random identifier using WebDAV.
+7. Decrypt the files using the key, nonce and authenticationTag of the file entry and validate the authenticationTag.
+
+**Postconditions:**
+- The client presents the cleartext names and content of the folder.
+
+**Failure handling:**
+- If verifying the metadata fails, the client MUST refuse further sync and inform the user.
+- If the folder is locked due to an ongoing change (423 Locked), the client MAY present the currently stored files alongside with a warning and SHOULD disable (on mobile) or postpone (on desktop) any file operation.
+- If a file is referenced in the metadata but cannot be found on the WebDAV file system, the client SHOULD warn the user.
+- If a file exists locally but not on the WebDAV file system, the client SHOULD re-upload the file.
+- If the number of files referenced in the metadata differs from the number of files on the file system, the client SHOULD display a warning to the user.
+
+#### Change transaction
+Every modification of an encrypted folder MUST be done in a change transaction.
+The locking keeps the metadata and the files in sync.
+
+**Preconditions:**
+- The client has access to the metadata-key of the topmost encrypted folder.
+
+**Steps:**
+1. Make a backup of the files to be modified and of the metadata files, so that in case of any upload problems the client can revert to a consistent state.
+2. Determine the topmost folder which needs to be changed, i.e. the folder containing all folders whose metadata changes.
+3. Increase the counter of the metadata of this folder and [lock](#lock-folder) the folder with the increased counter.
+   The lock also covers all subfolders of the locked folder.
+4. Check for changes in the encrypted folder.
+   If not current, [get the latest metadata](#get-metadata), [verify](#verifying-the-metadata) and decrypt it,
+   and check if the operation is still possible (e.g. a file to be renamed can already be deleted).
+5. Apply the changes of the [operation](#file-and-folder-operations) to the metadata and upload, move or delete the encrypted files and folders via [WebDAV](#webdav).
+6. For every folder whose metadata changed:
+   1. [Encrypt the metadata](#encrypting-the-metadata) using the metadata-key
+   2. [Sign the metadata](#signing-the-metadata)
+   3. [Update the metadata](#update-metadata)
+7. [Unlock](#unlock-folder) the folder.
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as Server
+    C->>S: POST /lock/folder-id (X-NC-E2EE-COUNTER)
+    S-->>C: e2e-token
+    opt metadata is not current
+        C->>S: GET /meta-data/folder-id
+        S-->>C: metadata, X-NC-E2EE-SIGNATURE
+        C->>C: verify and decrypt metadata
+    end
+    C->>C: apply the operation to the metadata
+    C->>S: WebDAV PUT, MKCOL, MOVE, COPY or DELETE (e2e-token)
+    C->>C: encrypt and sign the metadata
+    C->>S: PUT /meta-data/folder-id (metaData, e2e-token, X-NC-E2EE-SIGNATURE)
+    C->>S: DELETE /lock/folder-id (e2e-token)
+    S->>S: apply all changes
+```
+
+**Postconditions:**
+- All changes done while the folder was locked are applied by the server when the folder is unlocked.
+- The counter of the metadata was increased.
+
+**Failure handling:**
+- If any step fails, the client MUST show a verbose warning to the user, unlock the folder and abort.
+  The client MAY [unlock](#unlock-folder) the folder with `abort` to discard all changes done while the folder was locked.
+- In case the client lost connection after locking the folder, it MAY restart the operation later with another lock request.
+  In this case the client MUST send the lock token with the new lock request.
+  This enables the server to decide if the client is allowed to retry the upload.
+- If unlocking fails, the client MUST retry or abort the operation so that the folder is again in an unlocked and consistent state.
+
+_Examples of the locking scope (informative):_
 - `/enc/folderA/test` shall be moved into `/enc/folderA/subfolderB/`
   - the topmost folder to change is in that case `folderA`, so this needs to be locked and other subfolders of `/enc` are still accessible
   - the metadata of `/enc/folderA` and `/enc/folderA/subfolderB` needs to be handled correctly, e.g. with the counter
 - `/enc/folderA/test` shall be moved into `/enc/folderB/`
   - the topmost folder to change is in that case `/enc`, so this needs to be locked, thus the complete encrypted directory is locked
 
-### Modifying content of an end-to-end encrypted folder
-The following steps are REQUIRED to create, update or delete files of an end-to-end encrypted folder.
-If any of the following steps fail, the client MUST show a verbose warning to the user, unlock the folder and abort.
+#### File and folder operations
+The following operations are performed in step 5 of a [change transaction](#change-transaction).
 
-1. Make a backup of the file to be modified and the metadata file, so that in case of any upload problems the client can revert to a consistent state.
-2. Detect the topmost folder which needs to be changed
-   1. Increase the counter of the metadata of this folder
-   2. [Lock](#locking) the folder with the increased counter
-3. Check for changes in the encrypted folder.
-   1. If the current version is up to date, go to step 4.
-   2. If not current,
-      - get the latest metadata file
-      - verify the metadata file
-      - decrypt the metadata file
-      - check if the file operation is still possible (e.g. the file to be renamed can already be deleted)
-4. Perform the specific steps to create/update/delete the file or folder:
-    * Create new file:
-      1. Generate a new file-key and encrypt the file as described in [Encrypting data](#encrypting-data)
-      2. Create a new [random identifier](#random-identifiers)
-      3. Add a new [file entry](#file-entry) to the files array of the metadata, using the random identifier as key
-    * Rename existing file:
-      1. Change the filename in the files array, the encrypted file remains unchanged.
-    * Update existing file:
-      1. Generate a new file-key and encrypt the file as described in [Encrypting data](#encrypting-data)
-      2. Upload the encrypted file via WebDAV using the existing random identifier
-      3. Update the key, nonce and authenticationTag of the [file entry](#file-entry)
-    * Delete file:
-      1. Remove the corresponding entry from the files array
-    * Move file into subfolder:
-      1. Remove the file from the files array in the metadata file of the source folder and add it to the files array of the metadata of the target folder
-      2. Perform steps 6-8 (encrypt, sign and upload the metadata) for the source and the target folder
-    * Copy file into subfolder:
-      1. Same as creating a new file
-    * Create new subfolder:
-      1. Create a new [random identifier](#random-identifiers)
-      2. Add the folder to the folders array in the metadata file
-    * Rename existing subfolder:
-      1. Change the name in the folders array, the encrypted subfolder remains unchanged
-    * Delete subfolder:
-      1. Remove the corresponding entry from the folders array
-      2. [Delete the metadata](#delete-metadata) of the subfolder
-    * Move subfolder into another subfolder:
-      1. Remove the folder from the folders array in the metadata file of the source folder and add it to the folders array of the metadata of the target folder
-      2. Perform steps 6-8 (encrypt, sign and upload the metadata) for the source and the target folder
-      3. Move the encrypted subfolder using a WebDAV `MOVE` request, the subfolder keeps its random identifier
-    * Copy subfolder into another subfolder:
-      1. Recursively add new folders and new files, everything MUST be re-encrypted as described in [Encrypting data](#encrypting-data)
-      2. Perform steps 6-8 (encrypt, sign and upload the metadata) for every source and target folder
+| Operation | Changes |
+|-----------|---------|
+| Create file | Generate a new file-key and encrypt the file as described in [Encrypting data](#encrypting-data). Upload it using a new [random identifier](#random-identifiers) and add a new [file entry](#file-entry) to the files array. |
+| Rename file | Change the filename in the files array, the encrypted file remains unchanged. |
+| Update file | Generate a new file-key and encrypt the file as described in [Encrypting data](#encrypting-data). Upload it using the existing random identifier and update the key, nonce and authenticationTag of the file entry. |
+| Delete file | Delete the file via WebDAV and remove the entry from the files array. |
+| Move file into another folder | Remove the file entry from the files array of the source folder and add it to the files array of the target folder, and move the file via WebDAV. The metadata of both folders changes. |
+| Copy file into another folder | Same as creating a new file, the file MUST be re-encrypted. |
+| Create subfolder | Add a new [random identifier](#random-identifiers) to the folders array and perform [Creating an encrypted folder](#creating-an-encrypted-folder) for the subfolder. |
+| Rename subfolder | Change the name in the folders array, the encrypted subfolder remains unchanged. |
+| Delete subfolder | Remove the entry from the folders array, [delete the metadata](#delete-metadata) of the subfolder and delete the subfolder via WebDAV. |
+| Move subfolder into another folder | Remove the entry from the folders array of the source folder and add it to the folders array of the target folder, and move the subfolder via WebDAV, it keeps its random identifier. The metadata of both folders changes. |
+| Copy subfolder into another folder | Recursively create new folders and new files, everything MUST be re-encrypted. The metadata of every source and target folder changes. |
+| Delete topmost encrypted folder | Set `deleted` to `true` and empty the files and folders array, then delete the folder via WebDAV. |
 
-      _**Note:** As everything needs to be re-encrypted, this operation can be expensive for large folders, e.g. on mobile devices._
-    * Delete topmost encrypted folder:
-      1. Set `deleted` to `true` in the metadata
-      2. Empty the files and folders array
-5. Upload the modified or new encrypted file or folder, or delete the file or folder via [WebDAV](#webdav)
-6. [Encrypt the metadata](#encrypting-the-metadata) using the metadata-key
-7. [Sign the metadata](#signing-the-metadata)
-8. [Update the metadata](#update-metadata)
-9. [Unlock](#unlock-folder) the folder
+_**Note:** As everything needs to be re-encrypted, copying a subfolder can be expensive for large folders, e.g. on mobile devices._
 
-### Accessing content of an end-to-end encrypted folder
+#### Detecting a deleted encrypted folder
+**Preconditions:**
+- The WebDAV endpoint does not list a known encrypted folder anymore.
 
-#### Encrypted folder gets added
-- The [WebDAV](#webdav) endpoint lists the folder as encrypted.
-- The client SHOULD show a lock symbol when listing the folder.
-- The client MUST refuse to update the encryption status to false as this is not allowed.
-  If the server sends such an information the client MUST warn the user.
-- Upon entering an encrypted folder the client continues with [Accessing encrypted files](#accessing-encrypted-files).
+**Steps:**
+1. [Get the metadata](#get-metadata) of the folder.
+2. [Verify the metadata](#verifying-the-metadata) and decrypt it.
+3. Check that `deleted` is set to `true`.
 
-#### Encrypted folder gets deleted
-If the WebDAV endpoint does not list an encrypted folder anymore, the client MUST check if this is a valid delete.
-Therefore, the client MUST [get the metadata](#get-metadata), validate the metadata file and check if `deleted` is set to `true`.
-Otherwise, the client MUST display a warning that the folder was maliciously deleted and MUST refuse to delete the locally synced content.
+**Postconditions:**
+- The client accepts the deletion as a regular folder deletion and deletes the locally synced content.
 
-#### Accessing encrypted files
-No locking is required to read files of an encrypted folder.
-If the folder is locked due to an ongoing upload, the server responds with HTTP status code 423 Locked.
-The client MAY then present the currently stored files alongside with a warning and SHOULD disable (on mobile) or postpone (on desktop) any file operation.
-To access encrypted files the client MUST perform the following steps:
+**Failure handling:**
+- If the metadata is missing, cannot be verified, or `deleted` is not set to `true`, the client MUST display a warning that the folder was maliciously deleted and MUST refuse to delete the locally synced content.
 
-1. Check for changes in the encrypted folder.
-   If not current, [get the latest metadata](#get-metadata) of the encrypted folder.
-2. [Verify the metadata](#verifying-the-metadata)
-3. [Decrypt the metadata](#encrypting-the-metadata) using the metadata-key of the topmost encrypted folder
-4. Look up the [file entries](#file-entry) in the `files` array of the decrypted metadata
-5. Download the referenced files by their random identifier using WebDAV
-6. Decrypt the files using the key, nonce and authenticationTag of the file entry and validate the authenticationTag
+### Membership
 
-In case a file is referenced in the metadata but cannot be found on the WebDAV file system the client SHOULD warn the user.
-If the file exists locally but not on the WebDAV file system the client SHOULD re-upload the file.
-In case the number of files referenced in the encrypted metadata differs from the number of files on the file system, the client SHOULD display a warning to the user.
+#### Discovering keys of other users
+**Preconditions:**
+- The client wants to establish a trust relationship to another user.
 
-### Migrating filedrop
-Files added via secure file drop are added to the filedrop array, e.g. via the web browser, by [adding filedrop entries](#add-filedrop-entries).
-The filedrop-key, similar to the metadata-key, is encrypted to all users of this folder, so that all users that have access can migrate.
+**Steps:**
+1. Check if a certificate for the user ID is already stored locally (TOFU).
+   If a certificate is available, it MUST be used and the procedure ends.
+2. [Get the public key](#get-public-keys) of the user.
+3. Verify that the certificate is issued by the server key.
+4. Store the certificate locally for next operations.
 
-As soon as a client downloads a metadata file and finds a non-empty filedrop array, it MUST:
+**Postconditions:**
+- The certificate of the other user is known and trusted.
 
-1. [lock](#locking) the folder
-2. move each file from the filedrop array to the files array
-3. empty the filedrop array
-4. [update the metadata](#update-metadata)
-5. unlock the folder
+**Failure handling:**
+- If the user has not yet set up end-to-end encryption and thus has no certificate, it is not possible to share with the user. A warning SHOULD be shown.
+- If the certificate is not issued by the server key, the client MUST NOT initiate the encrypted share and SHOULD show a warning to the user.
+
+#### Adding a user
+**Preconditions:**
+- The folder is a topmost encrypted folder.
+- The certificate of the recipient is known, see [Discovering keys of other users](#discovering-keys-of-other-users).
+
+**Steps:**
+1. Share the folder via the [OCS sharing](https://docs.nextcloud.com/server/latest/developer_manual/client_apis/OCS/ocs-share-api.html) API to the recipient.
+2. In a [change transaction](#change-transaction):
+   1. Generate a new metadata-key.
+   2. Add the recipient with their certificate to the users array.
+   3. Add or replace the metadata-key of every user in the users array, wrapped with the public key of the user.
+   4. Add the hash of the metadata-key to the keyChecksums array.
+   5. Encrypt the metadata of all subfolders with the new metadata-key and update it.
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as Server
+    C->>S: GET /public-key (users)
+    S-->>C: certificate of the recipient
+    C->>C: verify certificate with server public key
+    C->>S: create the share via the OCS sharing API
+    C->>S: POST /lock/folder-id (X-NC-E2EE-COUNTER)
+    S-->>C: e2e-token
+    C->>C: generate metadata-key, wrap it for every user, add checksum
+    C->>S: PUT /meta-data/folder-id
+    loop every subfolder
+        C->>S: PUT /meta-data/subfolder-id
+    end
+    C->>S: DELETE /lock/folder-id
+```
+
+**Postconditions:**
+- The recipient can decrypt the metadata of the folder and all subfolders.
+
+**Failure handling:**
+- As described for the [change transaction](#change-transaction).
+
+#### Removing a user
+**Preconditions:**
+- The folder is a topmost encrypted folder shared with the user.
+
+**Steps:**
+1. Unshare the folder via the [OCS sharing](https://docs.nextcloud.com/server/latest/developer_manual/client_apis/OCS/ocs-share-api.html) API.
+2. In a [change transaction](#change-transaction):
+   1. Generate a new metadata-key.
+   2. Remove the user from the users array.
+   3. Add or replace the metadata-key of every user in the users array, wrapped with the public key of the user.
+   4. Add the hash of the metadata-key to the keyChecksums array.
+   5. Encrypt the metadata of all subfolders with the new metadata-key and update it.
+
+**Postconditions:**
+- The removed user has no key material to decrypt metadata or files changed or created in the future.
+
+**Failure handling:**
+- As described for the [change transaction](#change-transaction).
+
+#### Sharing with external users
+To share end-to-end encrypted files with users without a Nextcloud account, it is possible to create public shares with end-to-end encryption.
+
+**Preconditions:**
+- The folder is a topmost encrypted folder.
+
+**Steps:**
+1. Share the folder with the Nextcloud sharing flow as a link share.
+2. Generate a new key pair and CSR for the share user as described in [Setting up the initial device](#setting-up-the-initial-device), with the following changes:
+   - The `CN` of the CSR MUST be set to `s:SHARE_TOKEN`, where `SHARE_TOKEN` is replaced with the token of the share.
+   - When [creating the public key](#create-public-key) and [setting the private key](#set-private-key) the `shareToken` parameter, with the value of the token of the share, MUST be included.
+   - The private key MUST be encrypted with a newly generated mnemonic, it is stored on the server under the `s:SHARE_TOKEN` ID.
+3. Perform [Adding a user](#adding-a-user) for the share user `s:SHARE_TOKEN`.
+   The metadata version MUST be set to `"2.1"`.
+4. The client SHOULD provide the new mnemonic to the sharing user, who has to provide it to the share recipient using a secure second channel.
+
+**Postconditions:**
+- The share recipient can access the folder using the share token and the mnemonic.
+  The share recipient MUST include the share token as described in [General requirements](#general-requirements).
+
+To distinguish between share users and normal users the user ID can be checked for the `s:` prefix as the colon character is not allowed in normal user IDs.
+
+**Failure handling:**
+- If the key material of the share user cannot be created, the client MUST NOT add the share user to the metadata.
+
+#### Ingesting filedrop entries
+Files added via secure file drop, e.g. via the web browser, are added to the filedrop array by [adding filedrop entries](#add-filedrop-entries).
+The filedrop-key of every entry is wrapped for all users of the folder, so that all users that have access can ingest the entries.
+
+**Preconditions:**
+- The client found a non-empty filedrop array in a downloaded metadata file.
+
+**Steps:**
+1. In a [change transaction](#change-transaction):
+   1. Decrypt every filedrop entry using the filedrop-key.
+   2. Move each file from the filedrop array to the files array.
+   3. Empty the filedrop array.
 
 This MUST be done even when there is no actual change on other files, so e.g. when listing files, refreshing folders, etc.
 The reason is that the filedrop array is not protected via any mechanism, see [Accepted risks](#accepted-risks).
 Thus the time filedrop entries exist SHOULD be kept as short as possible.
 
-### Sharing encrypted folders to other users
+**Postconditions:**
+- All files of the filedrop array are part of the signed metadata.
 
-#### Key discovery of other users
-The clients MUST do the following when trying to establish a trust relationship to another user:
-
-1. Check if a certificate for the specified user ID is already downloaded (Trust On First Use (TOFU))
-   1. If a certificate is available, it MUST be used
-   2. If none is available, the client continues at 2.
-2. [Get the public key](#get-public-keys) of the user
-3. If the user has not yet set up end-to-end encryption and thus has no public key, it is not possible to share with the user.
-   A warning SHOULD then be shown.
-4. Verify that the certificate is issued by the downloaded server public key.
-   1. If yes: Use this certificate.
-   2. If no: The client MUST NOT initiate the encrypted share and SHOULD show a warning to the user.
-5. Store the user certificate locally for next operations
-
-#### Add someone to an end-to-end encrypted folder
-To create a share the following actions MUST be performed:
-
-1. The folder is shared via the [OCS sharing](https://docs.nextcloud.com/server/latest/developer_manual/client_apis/OCS/ocs-share-api.html) API to the recipient
-2. Generate a new metadata-key
-3. Add the recipient to the users array
-4. Add or replace the new metadata-key of every user in the users array, wrapped with the user's public key.
-5. Add the hash of the metadata-key to the keyChecksums array.
-6. Encrypt the metadata of all subfolders with the new metadata-key and update it.
-
-#### Remove someone from an existing share
-To remove someone from an existing share the following actions MUST be performed:
-
-1. The folder is unshared via the [OCS sharing](https://docs.nextcloud.com/server/latest/developer_manual/client_apis/OCS/ocs-share-api.html) API
-2. Generate a new metadata-key
-3. Remove the recipient from the users array
-4. Add or replace the new metadata-key of every user in the users array, wrapped with the user's public key.
-5. Add the hash of the metadata-key to the keyChecksums array.
-6. Encrypt the metadata of all subfolders with the new metadata-key and update it.
-
-### Sharing to external users
-To share end-to-end encrypted files with users without a Nextcloud account,
-it is possible to create public shares with end-to-end encryption.
-For this the topmost encrypted folder MUST be shared with the Nextcloud sharing flow as a link share.
-Then a key pair MUST be generated as described for the initial device, with the following changes:
-- When [creating the public key](#create-public-key) and [setting the private key](#set-private-key) the `shareToken` parameter,
-  with the value of the token of the created share, MUST be included.
-- The `CN` of the certificate MUST be set to `s:SHARE_TOKEN`,
-  where `SHARE_TOKEN` is replaced with the token of the share.
-
-This new share user MUST be added just like a normal user to the metadata.
-To distinguish between share users and normal users the user ID can be checked for the `s:` prefix as the colon character is not allowed in normal user IDs.
-When a share user is added to the users array, the metadata version MUST be set to `"2.1"`.
-
-The generated private key MUST be encrypted as described for the initial device with a newly generated mnemonic,
-and is stored on the server under the `s:SHARE_TOKEN` ID.
-The client SHOULD then provide the new mnemonic to the sharing user, who has to provide this information
-to the share recipient using a secure second channel.
-
-The share recipient MUST include the share token as described in [General requirements](#general-requirements).
+**Failure handling:**
+- As described for the [change transaction](#change-transaction).
 
 ## HTTP API
 This section specifies all requests used by this protocol.
@@ -704,7 +826,7 @@ The following requirements apply to all requests:
 - Parameters MUST be sent URL-encoded.
 - `<folder-id>` denotes the ID of the encrypted folder given by the WebDAV API.
 - The response data of OCS requests is contained in the `ocs.data` key of the OCS response.
-- A share recipient accessing a [public share](#sharing-to-external-users) MUST include the share token as the `X-NC-E2EE-SHARE-TOKEN` HTTP header in all OCS requests,
+- A share recipient accessing a [public share](#sharing-with-external-users) MUST include the share token as the `X-NC-E2EE-SHARE-TOKEN` HTTP header in all OCS requests,
   except for [adding filedrop entries](#add-filedrop-entries).
 
 ### Endpoint overview
@@ -748,7 +870,7 @@ Errors:
 | Parameter | Description |
 |-----------|-------------|
 | `csr` | The PEM encoded CSR. |
-| `shareToken` | (optional) The share token, when creating the certificate of a [share user](#sharing-to-external-users). |
+| `shareToken` | (optional) The share token, when creating the certificate of a [share user](#sharing-with-external-users). |
 
 Response data: `public-key`, the PEM encoded certificate issued by the server.
 
@@ -786,7 +908,7 @@ Errors:
 | Parameter | Description |
 |-----------|-------------|
 | `privateKey` | The [encrypted private key](#encrypted-private-key). |
-| `shareToken` | (optional) The share token, when setting the private key of a [share user](#sharing-to-external-users). |
+| `shareToken` | (optional) The share token, when setting the private key of a [share user](#sharing-with-external-users). |
 
 Response data: `private-key`, the stored encrypted private key.
 
@@ -1018,7 +1140,7 @@ We are investigating how a CSR approach here could help in such edge-cases at le
 ### Metadata versions
 The `version` key of the metadata MUST be one of the following values:
 - `"2.0"`: metadata as specified in this document
-- `"2.1"`: metadata containing share users in the users array, see [Sharing to external users](#sharing-to-external-users)
+- `"2.1"`: metadata containing share users in the users array, see [Sharing with external users](#sharing-with-external-users)
 
 Clients MUST support both versions.
 Clients MUST NOT use metadata of an unsupported version.
