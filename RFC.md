@@ -1,56 +1,81 @@
 # Nextcloud end-to-end encryption
 
-## Table of contents
+## Abstract
+This document specifies the end-to-end encryption protocol used by Nextcloud clients.
+It defines how clients manage key material, how the content and the metadata of end-to-end encrypted folders are encrypted, signed and stored on a Nextcloud server,
+and how encrypted folders are shared with other users and with users without a Nextcloud account.
 
-* [Introduction](#introduction)
-* [Protocol design goals](#protocol-design-goals)
-  * [Usage of widely available and tested libraries for crypto primitives](#usage-of-widely-available-and-tested-libraries-for-crypto-primitives)
-  * [Sharing functionality](#sharing-functionality)
-  * [Optional central data recovery](#optional-central-data-recovery)
-  * [Simple multi-device management](#simple-multi-device-management)
-  * [Simple authenticated key exchange](#simple-authenticated-key-exchange)
-  * [Support for HSM](#support-for-hsm)
-  * [Versioning](#versioning)
-* [Accepted feature loss](#accepted-feature-loss)
-* [Security goals](#security-goals)
-  * [Attacker model](#attacker-model)
-  * [Goals](#goals)
-* [Technical implementation](#technical-implementation)
-  * [Terminology](#terminology)
-  * [API endpoints](#api-endpoints)
-  * [Adding an end-to-end encrypted device](#adding-an-end-to-end-encrypted-device)
-  * [Creating an end-to-end encrypted folder](#creating-an-end-to-end-encrypted-folder)
-  * [Signing the metadata](#signing-the-metadata)
-  * [Verifying the metadata](#verifying-the-metadata)
-  * [Modifying and accessing content of an end-to-end encrypted folder](#modifying-and-accessing-content-of-an-end-to-end-encrypted-folder)
-  * [Sharing encrypted folders to other users](#sharing-encrypted-folders-to-other-users)
-  * [Sharing to external users](#sharing-to-external-users)
-  * [Edge cases](#edge-cases)
-* [Possible extensions](#possible-extensions)
-  * [Manual key verification](#manual-key-verification)
-  * [Hardware security module (HSM)](#hardware-security-module-hsm)
-* [Scenarios](#scenarios)
-  * [Regular operations](#regular-operations)
-  * [Attack scenarios](#attack-scenarios)
+## Status of this document
+This document specifies version 2.1 of the Nextcloud end-to-end encryption protocol, using the metadata versions `"2.0"` and `"2.1"`.
+It is the authoritative implementation guideline for Nextcloud clients.
 
-## Introduction
-This document specifies the Nextcloud end-to-end encryption and is meant as authoritative implementation guideline for our clients.
+The previous version of this protocol is specified in [RFC_v1.md](./RFC_v1.md).
+The change history is listed in the [README](./README.md#history).
+
 We would like to invite you to scrutinize our source code and cryptographic approach.
-
-We are looking forward to your input to refine our approach towards client-side encryption. 
+We are looking forward to your input to refine our approach towards client-side encryption.
 In addition, we will also make sure to validate our approach on time by external cryptographic experts.
 
-## Protocol design goals
+## Table of contents
+
+* [Abstract](#abstract)
+* [Status of this document](#status-of-this-document)
+* [Introduction](#introduction)
+  * [Design goals](#design-goals)
+  * [Scope](#scope)
+* [Conventions and terminology](#conventions-and-terminology)
+  * [Requirements language](#requirements-language)
+  * [Terminology](#terminology)
+* [Architecture overview](#architecture-overview)
+  * [Trust model](#trust-model)
+  * [Key hierarchy](#key-hierarchy)
+  * [Folder structure](#folder-structure)
+* [Threat model and security goals](#threat-model-and-security-goals)
+  * [Attacker model](#attacker-model)
+  * [Security goals](#security-goals)
+* [Data formats](#data-formats)
+  * [Metadata file](#metadata-file)
+  * [Initial metadata](#initial-metadata)
+* [Cryptographic operations](#cryptographic-operations)
+  * [Signing the metadata](#signing-the-metadata)
+  * [Verifying the metadata](#verifying-the-metadata)
+* [Protocol procedures](#protocol-procedures)
+  * [Adding an end-to-end encrypted device](#adding-an-end-to-end-encrypted-device)
+  * [Creating an end-to-end encrypted folder](#creating-an-end-to-end-encrypted-folder)
+  * [Modifying content of an end-to-end encrypted folder](#modifying-content-of-an-end-to-end-encrypted-folder)
+  * [Accessing content of an end-to-end encrypted folder](#accessing-content-of-an-end-to-end-encrypted-folder)
+  * [Migrating filedrop](#migrating-filedrop)
+  * [Sharing encrypted folders to other users](#sharing-encrypted-folders-to-other-users)
+  * [Sharing to external users](#sharing-to-external-users)
+* [HTTP API](#http-api)
+* [Security considerations](#security-considerations)
+  * [Accepted risks](#accepted-risks)
+  * [Attack scenarios](#attack-scenarios)
+  * [Handling of complete key material loss](#handling-of-complete-key-material-loss)
+* [Versioning and backward compatibility](#versioning-and-backward-compatibility)
+* [Appendix: Possible extensions](#appendix-possible-extensions)
+
+## Introduction
+Existing client-side encryption solutions often prevent the sharing of encrypted files or the usage on multiple devices.
+The Nextcloud end-to-end encryption is designed to allow both, while the server, which stores the encrypted data, is not able to access the content.
+
+The encryption is based upon an asymmetric cryptographic system.
+Every user owns a key pair, the certificate of the public key is issued by the Nextcloud server.
+Content and metadata of encrypted folders are encrypted with symmetric keys, which are encrypted for every user with access to the folder.
+
+### Design goals
+_This section is informative._
+
 The end-to-end encryption has to fulfill the following business and technical criteria.
 
-### Usage of widely available and tested libraries for crypto primitives
-We believe that for security-sensitive functionalities relying on existing and proven libraries is an essential requirement. 
+#### Usage of widely available and tested libraries for crypto primitives
+We believe that for security-sensitive functionalities relying on existing and proven libraries is an essential requirement.
 Thus we require that:
 
-* The used library for cryptographic primitives must be in use widely.
+* The used library for cryptographic primitives is in use widely.
 * The used library for cryptographic primitives has undergone successful security audits.
 
-Also due to our wide range of supported systems, the library must be available for all currently supported versions of the following environments:
+Also due to our wide range of supported systems, the library has to be available for all currently supported versions of the following environments:
 
 * iOS
 * Android
@@ -60,40 +85,35 @@ Also due to our wide range of supported systems, the library must be available f
 * Web browsers (e.g. using the Web Crypto API)
 * PHP
 
-_**Note:** While we do not have any current plans to add support for potential server-side decryption we want to keep this possibility open for the future._
+While we do not have any current plans to add support for potential server-side decryption we want to keep this possibility open for the future.
 
-### Sharing functionality
-Existing client-side encryption solutions often prevent the sharing of encrypted files, the Nextcloud end-to-end encryption must offer support for the following sharing scenarios:
+#### Sharing functionality
+The Nextcloud end-to-end encryption has to offer support for the following sharing scenarios:
 
 * Sharing encrypted folders with other users
 * Any user that is part of the shared folder is able to add new users to the share
+* Sharing encrypted folders with users without a Nextcloud account using public shares
 
-The following sharing scenarios are considered out of-scope:
-
-* Sharing single files or folders from an encrypted folder
-* Sharing encrypted folders with whole groups
-* Sharing subfolders of encrypted folders is not possible
-
-### Optional central data recovery
-While End-to-End encryption is meant to prevent access to data for other parties the reality is: People may lose their encryption keys.
+#### Optional central data recovery
+While end-to-end encryption is meant to prevent access to data for other parties the reality is: People may lose their encryption keys.
 
 While in a home user environment this might be acceptable, in an enterprise this can have grave implications.
 Thus an optional central data recovery has to be available offering the following capabilities:
 
 * Central recovery key per instance can be generated
-* Central recovery key must not be stored on the instance and can be safely exported (e.g. to be stored in a physical vault)
+* Central recovery key is not stored on the instance and can be safely exported (e.g. to be stored in a physical vault)
 * All data will also be encrypted with the central recovery key when enabled
-* Users must be prominently warned in the UI of their clients if a central data recovery key is enabled
-* When a central data recovery key is enabled the existing end-to-end encrypted folders must not be affected
+* Users are prominently warned in the UI of their clients if a central data recovery key is enabled
+* When a central data recovery key is enabled the existing end-to-end encrypted folders are not affected
 
-### Simple multi-device management
+#### Simple multi-device management
 Access to encrypted data should easily be possible from any device the end-user owns, this includes all mobile devices as well as desktop devices.
 
 Thus:
-* Sharing keys between existing devices must be frictionless
+* Sharing keys between existing devices has to be frictionless
 * Newly added devices should have access to all previously encrypted data
 
-### Simple authenticated key exchange
+#### Simple authenticated key exchange
 Key exchange is a key problem of any cryptographic system.
 On one hand one wants to ensure that the key of the participating parties is authentic.
 On the other hand, manual comparison of key material is cumbersome and rarely something that regular users can be bothered to do.
@@ -102,15 +122,23 @@ A secure and yet simple system has to implement the following properties:
 * Key exchange between parties should be frictionless
 * Optionally, clients can offer key verification by comparing certificate fingerprints (e.g. by using QR-Codes)
 
-### Support for HSM
+#### Support for HSM
 To fulfill enterprise security requirements it should be possible that key material is generated by a hardware security module.
 Thus offering strong authentication, tampering resistance and a complete audit trail.
 
-### Versioning
+#### Versioning
 The protocol has to support versioning in case of future changes in the metadata or cryptographic parameters.
 
-## Accepted feature loss
-Since the data is not accessible to the server and to simplify the implementation, losing following features is acceptable:
+### Scope
+_This section is informative._
+
+The following sharing scenarios are out of scope:
+
+* Sharing single files or folders from an encrypted folder
+* Sharing encrypted folders with whole groups
+* Sharing subfolders of encrypted folders, it is only possible to share the topmost encrypted folder
+
+Since the data is not accessible to the server and to simplify the implementation, losing the following features is accepted:
 
 * Server-side trash bin
 * Server-side versioning
@@ -118,13 +146,64 @@ Since the data is not accessible to the server and to simplify the implementatio
 * Server-side previews
 * Sharing to groups
 * Sharing at the level of individual files
-* Sharing of subfolders of an encrypted folder. It is only possible to share topmost encrypted folder
-* Filedrop: due to implementation there can be no sanity check if filedrop could have been modified (deleting files on server). Thus it is acceptable that an attacker can remove files and filedrop array, so that users will not have uploaded files. As attackers cannot decrypt those files, this "data loss" is acceptable.
+* Sharing of subfolders of an encrypted folder
 * Scanning with files_antivirus. Metadata are also ignored by files_antivirus, even though they could be scanned, it adds too much latency.
+* Integrity of filedrop entries, see [Accepted risks](#accepted-risks)
 
-## Security goals
+## Conventions and terminology
+
+### Requirements language
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in BCP 14 ([RFC 2119](https://www.rfc-editor.org/rfc/rfc2119), [RFC 8174](https://www.rfc-editor.org/rfc/rfc8174)) when, and only when, they appear in all capitals, as shown here.
+
+Sections marked as informative do not contain requirements.
+
+### Terminology
+* client: an application implementing this protocol, e.g. the desktop, mobile or web client.
+* device: anything able to run one of our supported clients.
+* server: the Nextcloud server with the `end_to_end_encryption` app enabled.
+* topmost encrypted folder: an encrypted folder whose parent folder is not encrypted.
+* subfolder: an encrypted folder inside of a topmost encrypted folder.
+* random identifier: the name of an encrypted file or subfolder on the server, used instead of its cleartext name.
+* file-metadata: cleartext name, mimetype, file-key, nonce/iv and authTag of a file
+* file-key: the actual key used to encrypt the file
+* folders-array: associative array mapping random identifiers to folder names
+* files-array: associative array mapping random identifiers to the metadata of the file
+* users-array: array of information of users. Used to list all users of a shared and encrypted folder, with their certificate and the encrypted metadata-key
+* metadata-key: key used to encrypt the metadata of the folder
+* filedrop-key: key used to encrypt a single entry of the filedrop array
+* metadata: metadata of all files (file-metadata) and sub-folders in the encrypted folder, list of checksums of metadata-keys and a counter
+* counter: a number in the metadata that is increased with every change of the metadata
+* lock token: a token issued by the server when locking an encrypted folder, required for all modifications of the folder
+* share user: the pseudo user representing the recipients of a public share
+* PEM: Textual encoding of certificate and key structures according to [RFC 7468](https://datatracker.ietf.org/doc/html/rfc7468)
+
+## Architecture overview
+_This section is informative._
+
+### Trust model
+As a PKI approach for encryption is used, every certificate is issued by a central root authority.
+By default, the Nextcloud server acts as a root authority and issues the certificates from certificate signing requests (CSR) of the clients.
+Alternatively, an external certificate authority may be used with certificates being generated and their lifetime tracked outside of the `end_to_end_encryption` Nextcloud app.
+That would be the case if certificates (and their associated key-pair) are stored on dedicated USB tokens.
+
+The server is trusted when requesting the server certificate, when adding a new device of a user, and when a certificate of another user is downloaded for the first time (trust on first use, TOFU).
+
+### Key hierarchy
+* Every user owns an RSA key pair. The certificate is stored on the server, the private key is stored on the server encrypted with a key derived from a mnemonic only known to the user.
+* Every topmost encrypted folder has a metadata-key, which is encrypted with the public key of every user with access to the folder.
+  All subfolders of a topmost encrypted folder share its metadata-key.
+* Every file has its own file-key, which is stored in the encrypted metadata of its folder.
+* Every filedrop entry has its own filedrop-key, which is encrypted with the public key of every user with access to the folder.
+
+### Folder structure
+Data access to encrypted folders happens via the regular WebDAV API.
+On the server, encrypted files and subfolders are stored using random identifiers as names.
+Every encrypted folder has a metadata file, which maps the random identifiers to the cleartext names and contains the file-keys of the files.
+
+## Threat model and security goals
+
 ### Attacker model
-The end-to-end encryption must protect against an attacker with following capabilities:
+The end-to-end encryption MUST protect against an attacker with the following capabilities:
 
 * Attacker can circumvent underlying TLS/SSL transport encryption
 * Attacker has full control over the server (e.g. compromised server or malicious admin)
@@ -132,153 +211,21 @@ The end-to-end encryption must protect against an attacker with following capabi
   * Future support for separate trusted key server could avoid the TOFU compromise and therefore protect against a stronger attacker.
 * Removed users: A user who is part of a shared end-to-end encrypted folder is trusted until the user has been removed
 
-### Goals
-The protocol must achieve following goals when assuming an attacker as specified above.
+### Security goals
+The protocol MUST achieve the following goals when assuming an attacker as specified above.
 
-* Access to ciphertext must not leak file content nor file names nor the names of subfolders.
-  * Leaking the number of files in an encrypted folder is an accepted risk.
-  * Leaking the name of the topmost encrypted folder is an accepted risk.
-  * Leaking which file operation has been performed on files in an encrypted folder is an accepted risk.
-* Once a user has been removed from an encrypted folder they should have no relevant key material to decrypt files updated or created in the future
-* **Confidentiality**: No one, except the legitimate recipients, must have access to the encrypted documents.
-* **Integrity**: Even with writable access to the ciphertext one must not be able to tamper with the data unnoticed.
-    In case the number of files referenced in the encrypted metadata differs from the number of files on the file system, a warning should be displayed to the user.
-* **Authentication**: all valid changes (uploading new files, changing existing files, removing existing files) to an end-to-end encrypted folder must only be made by a user who is part of the (shared) folder. 
-   Malicious changes are detected at the latest when the client that made the most recent valid change synchronizes the next time.
+* Access to ciphertext MUST NOT leak file content nor file names nor the names of subfolders.
+  The accepted risks are listed in [Accepted risks](#accepted-risks).
+* Once a user has been removed from an encrypted folder they SHOULD have no relevant key material to decrypt files updated or created in the future.
+* **Confidentiality**: No one, except the legitimate recipients, has access to the encrypted documents.
+* **Integrity**: Even with writable access to the ciphertext one is not able to tamper with the data unnoticed.
+* **Authentication**: All valid changes (uploading new files, changing existing files, removing existing files) to an end-to-end encrypted folder are only made by a user who is part of the (shared) folder.
+  Malicious changes are detected at the latest when the client that made the most recent valid change synchronizes the next time.
 
-## Technical implementation
-The encryption is based upon an asymmetric cryptographic system.
-The following steps will walk through the technical implementation of the encryption.
+## Data formats
 
-### Terminology
-* Device: a device can be anything able to run one of our supported clients.
-* file-metadata: cleartext name, mimetype, file-key, nonce/iv and authTag of a file
-* file-key: the actual key used to encrypt the file
-* folders-array: associative array mapping random identifiers names to folder name
-* files-array: associative array mapping random identifiers names to the (encrypted) metadata of the file
-* users-array: array of information of users. Used to list all users of a shared and encrypted folder, with their certificate and the encrypted metadata key
-* metadata-key: key used to encrypt the metadata of the folder
-* filedrop-key: key used to encrypt a single entry of the filedrop array
-* metadata: metadata of all files (file-metadata) and sub-folders in the encrypted folder, list of checksums of metadata-keys and a counter
-* PEM: Textual encoding of certificate and key structures according to [RFC 7468](https://datatracker.ietf.org/doc/html/rfc7468)
-
-### API endpoints
-This RFC makes use of two different APIs:
-1. The [Nextcloud WebDAV](https://docs.nextcloud.com/server/latest/developer_manual/client_apis/WebDAV/index.html) API
-2. The `end_to_end_encryption` [OCS](https://www.open-collaboration-services.org/) API
-
-When an OCS API endpoint is mentioned then this RFC uses the `v2` endpoint of OCS provided by Nextcloud.
-So that all OCS requests share the same base URL:
-
-- `/ocs/v2.php/apps/end_to_end_encryption/api/v{VERSION}`
-
-Where `{VERSION}` is the major version of the current metadata version.
-
-### Adding an end-to-end encrypted device
-When requesting the server certificate and when adding a new device of a user, we assume that the server is trusted (TOFU).
-As a first step, a device has to be added to an account.
-Depending on whether an end-to-end encrypted device already has been added to an account, the device will have to create new key material or use existing key material.
-
-To check whether a certificate has already been issued or not the `/public-key` OCS endpoint should be used. 
-In addition, the client has to download the server’s public key from the `/server-key` OCS endpoint and use this to verify the certificate chain in all future operations.
-
-Alternatively, an external certificate authority may be used with certificates being generated and their lifetime tracked outside of the end_to_end_encryption Nextcloud app. That would be the case if certificates (and their associated key-pair) are stored on dedicated USB tokens.
-
-#### Initial device
-When a device is initially added to an account the device has to generate all relevant key material for the user account and provision those on the server:
-
-1. Client has to generate a new X.509 Certificate Signing Request (CSR), following [RFC 2986](https://datatracker.ietf.org/doc/html/rfc2986), and private key
-  1. `CN` of X.509 certificate must be set to the currently logged-in user ID
-2. Client uploads the X.509 CSR to the server
-  1. The client encodes the CSR using PEM encoding
-  2. The client transmits the CSR as a URL-encoded `POST` parameter `csr` to the `/public-key` OCS API endpoint.
-3. Server issues a certificate if the `CN` matches the current user ID.
-4. Server returns the issued certificate.
-5. Client verifies their certificate was signed by the server by verifying the signature using the previously fetched public key of the server.
-6. Client stores the private key and the certificate in the keychain of the device.
-
-In a second step, the private key will be stored encrypted on the server to simplify the addition of further devices:
-
-1. Client generates a 12 word long mnemonic from the English `BIP-0039` word list. The word list contains 2048 words, thus resulting in 2048^12 possible key combinations.
-2. Client encrypts the private key
-  1. Encode the private key
-    - Using [PKCS#8 (RFC 5208)](https://tools.ietf.org/html/rfc5208#section-5) and PEM encoding
-    - Use Base64 to encode the resulting PEM
-  2. Generate the encryption key using a key derivation function (KDF) on the generated mnemonic
-    - KDF: PBKDF2 with HMAC-SHA256
-    - Iterations: 600000
-    - Salt: 40 randomly generated bytes
-  3. Encrypt the encoded private key using the encryption key
-    - AES/GCM/NoPadding
-    - 256 bit key size
-    - 96 bit nonce
-    - 128 bit authenticationTag, which is appended to the encrypted private key
-3. Client uploads the encrypted private key (including the authenticationTag), nonce and salt to the server
-  1. key, salt, and nonce are Base64 encoded
-  2. Then concatenated using `|` as the separator (`{base64(key + authenticationTag)}|{base64(nonce)}|{base64(salt)}`)
-  3. This string is then sent as the URL-encoded `POST` parameter `privateKey` to the `/private-key` OCS endpoint.
-4. The mnemonic is displayed to the user as a space-separated text and the user is asked to note it down in a secure place.
-  For encrypting/decrypting, the mnemonic must have no whitespace and be lowercase.
-5. The mnemonic is stored in the keychain of the device with spaces so it can be shown more readable.
-
-In case a user loses their device, they can easily recover by using the mnemonic passphrase. 
-The mnemonic passphrase can also be shown in the client settings in case the user forgets their mnemonic. 
-Displaying the mnemonic requires the user to enter their PIN/fingerprint again on mobile devices.
-
-#### Initial device with hardware USB token storage of certificate
-
-When a device is initially added to an account the device will have to upload relevant key material for the user account on the server:
-
-1. Client will discover on secure storage the proper certificate (and key pair) to use
-2. Client uploads their certificate to the server using the OCS `POST` endpoint `/public-key`
-3. Client may check the certificate of the server by using `GET` on the `/server-key` OCS endpoint.
-4. Client stores the certificate ID and enables end-to-end encryption feature on the client.
-
-#### Further devices
-In case a certificate already exists for the user the client has to download the existing private key. 
-This is done the following way:
-
-1. Client downloads private key from the `/private-key` endpoint.
-2. Client asks the user for the mnemonic and decrypts the private key using AES/GCM/NoPadding as cipher (256 bit key size) and PBKDF2WithHmacSHA256 as key derivation with 600000 iterations. Alternatively the client should use the former algorithm and parameters in case the private key was uploaded with an older RFC version. A client must try the following settings:
-  1. PBKDF2WithHmacSHA1 as key derivation with 1024 iterations
-  2. PBKDF2WithHmacSHA1 as key derivation with 600000 iterations
-  3. PBKDF2WithHmacSHA256 as key derivation with 600000 iterations
-3. Client checks if private key belongs to previously downloaded public certificate.
-4. Client checks if their certificate was signed by the server (checking the server's public key from the OCS `/server-key` endpoint)
-5. Client stores the private key in the keychain of the device.
-6. The mnemonic is stored in the keychain of the device (ideally with spaces so it can be shown more readable).
-
-#### Updating a user certificate
-
-A user certificate may expire or be revoked and renewed if needed. In such case, a migration will be needed as the key pair will change and metadata keys encrypted with the former public key will no longer be accessible.
-
-The certificate migration will happen at initiative from one Files client of the specific concerned user. That user will trigger the certificate migration. During that process the following steps need to happen:
-
-- prerequisite is that all currently encrypted folders are synced by the client that will do a certificate change or renewal. The user interface of clients should make this blocking before performing the migration.
-- on demand certificate migration is still possible as a fallback
-- replace the certificate that is currently stored on the server
-- identify all folders having files currently accessible from this user and for each of them:
-  - decrypt the metadata key associated to each file for accessible by this user
-  - encrypt it with the new public key
-  - upload the metadata file again with the new encrypted metadata key and the new certificate (without the private key)
-  - sign the metadata file by the new user certificate
-
-During that process the usual process to modify one folder metadata file has to be followed as described in [Update metadata file](#update-metadata-file).
-
-### Creating an end-to-end encrypted folder
-To create an end-to-end encrypted folders multiple steps have to be performed.
-First of all, data access to such folders happens via our regular WebDAV API available at `/remote.php/dav/{userId}/files`.
-
-#### Mark folder as end-to-end encrypted
-After creating a folder via WebDAV the folder has to be flagged as end-to-end encrypted.
-This can be performed by sending a `PUT` request to the `/encrypted/<folder-id>` OCS endpoint where `<folder-id>` has to be the folder ID indicated by our WebDAV API.
-
-Once this flag has been set the folder is only accessible by clients supporting end-to-end encryption, regular WebDAV clients cannot access it anymore.
-Only empty folders can be marked as end-to-end encrypted.
-Once a folder is marked as encrypted, it cannot be marked as unencrypted again.
-
-#### Create metadata file
-Every folder contains a metadata file containing the following information:
+### Metadata file
+Every encrypted folder MUST have a metadata file containing the following information:
 
 * metadata of all files (file-metadata) and sub-folders
 * list of checksums of metadata-keys
@@ -289,12 +236,13 @@ The metadata is a JSON document with the following structure depicted below.
 We use a notation with inline comments (`//`) for better readability.
 Note that comments are not available in standalone JSON and only used here for better understanding.
 
-In case the central data recovery key is enabled the metadata will also be encrypted towards the server's central data recovery key. Clients must show a prominent warning to the users for such scenarios.
+In case the central data recovery key is enabled the metadata MUST also be encrypted towards the server's central data recovery key.
+Clients MUST show a prominent warning to the users for such scenarios.
 
 The JSON document contains at least 3 keys and at most 4 keys:
 - `metadata`: The value is the encrypted inner metadata
-- `users`: The list of users with access to the folder
-- `version`: The metadata version, either `"2.0"` or `"2.1"` if the users array contains users of public shares (see [Sharing to external users](#sharing-to-external-users))
+- `users`: The list of users with access to the folder, only present for topmost encrypted folders
+- `version`: The metadata version, see [Versioning and backward compatibility](#versioning-and-backward-compatibility)
 - `filedrop`: (optional) file drop encrypted files
 
 ```json
@@ -317,7 +265,7 @@ The JSON document contains at least 3 keys and at most 4 keys:
       // The following contains the reference to all users who have access to the share, including owner.
       // A newly created folder thus will also have this array with the owner as its first entry.
       // The metadata-key is encrypted with RSA/ECB/OAEPWithSHA-256AndMGF1Padding
-      { 
+      {
          "userId": "testUser",
          "certificate": "public key of this user",
          "encryptedMetadataKey": "encrypted metadata-key then base64, but, ALWAYS used in NON-base64 format when encrypting data with it)"
@@ -339,7 +287,7 @@ The JSON document contains at least 3 keys and at most 4 keys:
          "users": [
               // The following contains the reference to all users who have access to filedrop.
               // The filedrop-key is encrypted with RSA/ECB/OAEPWithSHA-256AndMGF1Padding
-             { 
+             {
                "userId": "testUser",
                "encryptedFiledropKey": "encrypted filedrop-key then base64"
              }
@@ -358,10 +306,10 @@ Metadata:
    "deleted": false,
    "counter": 12,
    "folders": {
-      "<uid>": "cleartext name", 
+      "<uid>": "cleartext name",
       "<uid>": "cleartext name 2"
    },
-   "files": { 
+   "files": {
       "<uid>": {
          // Unencrypted file name
          "filename": "test.txt",
@@ -390,221 +338,310 @@ Filedrop:
 }
 ```
 
-When creating a new folder, an initial metadata file needs to be created with following values
-- counter starts with 0
-- if folder is topmost encrypted folder
-  - generate a new metadata-key
-  - the users array contains the current user with userId, certificate and encrypted metadata-key
-- if folder is a subfolder of an encrypted folder
-  - the metadata-key of the topmost encrypted folder is used, all subfolders share the metadata-key of their topmost encrypted folder
-  - the users-array is not included
+Random identifiers of files and folders MUST follow `/^[0-9a-fA-F]{32}$/`.
+They SHOULD be created by generating a random UUID and removing the dashes (`-`).
 
-The metadata has to be created by sending a `POST` request to the `/meta-data/<folder-id>` OCS API endpoint, where `<folder-id>` has to be the folder ID indicated by our WebDAV API.
-- The encrypted metadata has to be sent as the URL-encoded `metaData` parameter.
-- The metadata signature has to be sent as the `X-NC-E2EE-SIGNATURE` HTTP header (see [Signing the metadata](#signing-the-metadata)).
-- The lock token has to be sent as the `e2e-token` HTTP header.
-  Thus the folder has to be locked before creating the metadata, in case of a subfolder the lock of the parent folder is used
-  (see [Uploading payload and metadata file](#uploading-payload-and-metadata-file-step-5--8)).
+### Initial metadata
+When creating a new folder, the client MUST create an initial metadata file with the following values:
+- the counter starts with 0
+- if the folder is a topmost encrypted folder
+  - a new metadata-key MUST be generated
+  - the users array MUST contain the current user with userId, certificate and encrypted metadata-key
+- if the folder is a subfolder of an encrypted folder
+  - the metadata-key of the topmost encrypted folder MUST be used, all subfolders share the metadata-key of their topmost encrypted folder
+  - the users array MUST NOT be included
 
-If metadata already exists for the folder, the server responds with HTTP status code 409 Conflict.
-
-#### Update metadata file
-Every update of the metadata file has to be done while the folder is locked.
-The client locks the folder, uploads the changed files and the updated metadata file and finally unlocks the folder.
-The required requests are described in [Uploading payload and metadata file](#uploading-payload-and-metadata-file-step-5--8).
-
-#### Migrating filedrop
-Files added via secure file drop are added to filedrop array via web browser.
-The filedrop-key, similar to metadata-key, is then encrypted to all users of this folder, so that all users that have access can migrate.
-
-To add entries to the filedrop array a `PUT` request to the `/meta-data/<folder-id>/filedrop` OCS endpoint has to be sent.
-- The new entries have to be sent as the URL-encoded `filedrop` parameter, a JSON object mapping the random identifiers to the encrypted entries.
-- The server merges the new entries into the filedrop array of the metadata.
-- No lock token is required and the counter is not changed, as the filedrop array is not part of the signed metadata.
-
-As soon as a client downloads metadata file and finds a non-empty filedrop array, they shall do
-
-1. lock folder
-2. move each file from filedrop array to files array
-3. empty filedrop array
-4. upload updated metadata file
-5. unlock folder
-
-This needs to be done even when there is no actual change on other files, so e.g. when listing files, refreshing folders, etc.
-Reason is that filedrop array is not protected via any mechanism and thus an attacker could remove array and payload and thus no user knows about this uploaded file.
-The attacker cannot decrypt it, as they do not have access to the filedrop key.
-Thus it is best to keep time for existing filedrop as little as possible.
+## Cryptographic operations
 
 ### Signing the metadata
-Signature: Cryptographic Message Syntax (CMS) signed data, according to [RFC 5652](https://datatracker.ietf.org/doc/html/rfc5652)
-- certificate of user
-- Signed data:
-   - Create metadata JSON in a compact format
-      - Remove the filedrop part
-      - Stringified without spaces and newlines (except in keys or values)
-      - Object keys are sorted alphabetically
-   - Encode the JSON string with Base64 prior signing
-   - SignerIdentifier of the CMS container contains userId of the user who created the signature
-   - Must include the signed attributes described in [RFC 6488](https://www.rfc-editor.org/rfc/rfc6488.html)
+Every metadata file MUST be signed by the user who created or changed it.
+The signature is a Cryptographic Message Syntax (CMS) signed data structure, according to [RFC 5652](https://datatracker.ietf.org/doc/html/rfc5652):
+- It MUST be created using the certificate of the user.
+- The signed data MUST be prepared from the metadata JSON as follows:
+   1. Remove the `filedrop` part
+   2. Stringify the JSON without spaces and newlines (except in keys or values), with object keys sorted alphabetically
+   3. Encode the JSON string with Base64
+- The SignerIdentifier of the CMS container MUST identify the userId of the user who created the signature.
+- It MUST include the signed attributes described in [RFC 6488](https://www.rfc-editor.org/rfc/rfc6488.html).
+- It MUST be generated in detached mode, the metadata is not included in the signature as it is already stored on the server and is always retrieved with a `GET` request.
 
-The encoded binary CMS structure is base64-encoded and sent in the header of the metadata request.
-The Section [Uploading payload and metadata](#uploading-payload-and-metadata-file-step-5--8) further describes how the signature is handled.
-***A CMS Signature MUST be always generated with detached mode (the metadata is not included in the signature as it is already stored on the server and is always retrieved with a GET request***
-***A metadata for a CMS Signature MUST be prepared as described at the beginning of this section (without spaces and newlines and also base64 encoded when passing it to signature generation API***
+The encoded binary CMS structure is Base64 encoded and sent as the `X-NC-E2EE-SIGNATURE` HTTP header of the request creating or updating the metadata.
 
 ### Verifying the metadata
-Before using the metadata file, e.g. on a folder refresh the client has to verify the signature.
+Before using a metadata file, e.g. on a folder refresh, the client MUST verify its signature.
 The signature is returned as the `X-NC-E2EE-SIGNATURE` HTTP response header of the `GET` request to the `/meta-data/<folder-id>` OCS endpoint.
 It is also available as the `{http://nextcloud.org/ns}e2ee-metadata-signature` WebDAV property of the folder.
 
-To verify the signature the client has to:
+To verify the signature the client MUST:
 1. Prepare the signed data from the metadata as described in [Signing the metadata](#signing-the-metadata).
 2. Find the user identified by the SignerIdentifier of the CMS signature in the `users` array of the topmost encrypted folder.
 3. Verify the CMS signature using the certificate of this user.
 
-After the signature was verified, the client has to find its metadata-key in the `users` array and decrypt it to decrypt the metadata.
+After the signature was verified, the client finds its metadata-key in the `users` array and decrypts it to decrypt the metadata.
 
-If any of the following checks fail, the client needs to refuse further sync and informs the user:
-- check counter: new counter must be greater than locally stored counter
-- check signature
-- check that hash of metadata-key is in keyChecksums
-- check that no hash has been removed from the keyChecksums
-- check if cert of all users is issued by the CA
+If any of the following checks fail, the client MUST refuse further sync and inform the user:
+- the new counter MUST be greater than the locally stored counter
+- the signature MUST be valid
+- the hash of the metadata-key MUST be in keyChecksums
+- no hash MUST have been removed from keyChecksums
+- the certificates of all users MUST be issued by the CA
 
-### Modifying and accessing content of an end-to-end encrypted folder
-The following steps are required to create, update, delete files of an end-to-end encrypted folder.
-If any of the following steps fail, show a verbose warning to the user, unlock the folder and abort.
+## Protocol procedures
+
+### Adding an end-to-end encrypted device
+As a first step, a device has to be added to an account.
+Depending on whether an end-to-end encrypted device already has been added to an account, the device MUST either create new key material or use existing key material.
+
+To check whether a certificate has already been issued, the client SHOULD use the `/public-key` OCS endpoint.
+In addition, the client MUST download the server's public key from the `/server-key` OCS endpoint and MUST use it to verify the certificate chain in all future operations.
+
+#### Initial device
+When a device is initially added to an account the device MUST generate all relevant key material for the user account and provision it on the server:
+
+1. The client generates a new private key and a X.509 Certificate Signing Request (CSR), following [RFC 2986](https://datatracker.ietf.org/doc/html/rfc2986).
+   The `CN` of the CSR MUST be set to the currently logged-in user ID.
+2. The client uploads the CSR to the server.
+   1. The client encodes the CSR using PEM encoding.
+   2. The client transmits the CSR as the URL-encoded `POST` parameter `csr` to the `/public-key` OCS API endpoint.
+3. The server MUST only issue a certificate if the `CN` matches the current user ID.
+4. The server returns the issued certificate.
+5. The client MUST verify that the certificate was signed by the server, using the previously fetched public key of the server.
+6. The client stores the private key and the certificate in the keychain of the device.
+
+In a second step, the private key is stored encrypted on the server to simplify the addition of further devices:
+
+1. The client generates a 12 word long mnemonic from the English `BIP-0039` word list. The word list contains 2048 words, thus resulting in 2048^12 possible key combinations.
+2. The client encrypts the private key:
+   1. Encode the private key
+      - Using [PKCS#8 (RFC 5208)](https://tools.ietf.org/html/rfc5208#section-5) and PEM encoding
+      - Use Base64 to encode the resulting PEM
+   2. Generate the encryption key using a key derivation function (KDF) on the generated mnemonic
+      - KDF: PBKDF2 with HMAC-SHA256
+      - Iterations: 600000
+      - Salt: 40 randomly generated bytes
+   3. Encrypt the encoded private key using the encryption key
+      - AES/GCM/NoPadding
+      - 256 bit key size
+      - 96 bit nonce
+      - 128 bit authenticationTag, which is appended to the encrypted private key
+3. The client uploads the encrypted private key (including the authenticationTag), nonce and salt to the server:
+   1. key, salt, and nonce are Base64 encoded
+   2. Then concatenated using `|` as the separator (`{base64(key + authenticationTag)}|{base64(nonce)}|{base64(salt)}`)
+   3. This string is sent as the URL-encoded `POST` parameter `privateKey` to the `/private-key` OCS endpoint.
+4. The client displays the mnemonic to the user as a space-separated text and asks the user to note it down in a secure place.
+   For encrypting and decrypting, the mnemonic MUST have no whitespace and MUST be lowercase.
+5. The client stores the mnemonic in the keychain of the device with spaces so it can be shown more readable.
+
+In case a user loses their device, they can recover by using the mnemonic passphrase.
+The client MAY show the mnemonic passphrase in the client settings in case the user forgets their mnemonic.
+On mobile devices, displaying the mnemonic MUST require the user to enter their PIN/fingerprint again.
+
+#### Initial device with hardware USB token storage of certificate
+When a device is initially added to an account the device MUST upload the relevant key material for the user account to the server:
+
+1. The client discovers the certificate (and key pair) to use on the secure storage.
+2. The client uploads the certificate to the server using the `/public-key` OCS endpoint.
+3. The client MAY check the certificate of the server by using `GET` on the `/server-key` OCS endpoint.
+4. The client stores the certificate ID and enables the end-to-end encryption feature on the client.
+
+#### Further devices
+In case a certificate already exists for the user the client MUST download the existing private key:
+
+1. The client downloads the private key from the `/private-key` OCS endpoint.
+2. The client asks the user for the mnemonic and decrypts the private key using AES/GCM/NoPadding as cipher (256 bit key size) and PBKDF2WithHmacSHA256 as key derivation with 600000 iterations.
+   If the private key was uploaded with an older version of this protocol, the client MUST use the legacy parameters described in [Versioning and backward compatibility](#versioning-and-backward-compatibility).
+3. The client MUST check that the private key belongs to the previously downloaded certificate.
+4. The client MUST check that the certificate was signed by the server, using the server's public key from the `/server-key` OCS endpoint.
+5. The client stores the private key in the keychain of the device.
+6. The client stores the mnemonic in the keychain of the device, it SHOULD be stored with spaces so it can be shown more readable.
+
+#### Updating a user certificate
+A user certificate may expire or be revoked and renewed if needed.
+In such case, a migration is needed as the key pair changes and metadata-keys encrypted with the former public key are no longer accessible.
+
+The certificate migration is initiated by one client of the concerned user.
+During the migration the following steps MUST be performed:
+
+- All currently encrypted folders MUST be synced by the client that performs the certificate change or renewal before the migration is performed.
+  The user interface of clients SHOULD block until this is done.
+- The client replaces the certificate that is currently stored on the server.
+- The client identifies all folders accessible by this user and for each of them:
+  - decrypts the metadata-key accessible by this user
+  - encrypts it with the new public key
+  - uploads the metadata file again with the new encrypted metadata-key and the new certificate (without the private key)
+  - signs the metadata file with the new user certificate
+
+On demand certificate migration MAY be used as a fallback.
+For every metadata update, the client MUST follow the process described in [Update metadata file](#update-metadata-file).
+
+### Creating an end-to-end encrypted folder
+To create an end-to-end encrypted folder multiple steps have to be performed.
+Data access to such folders happens via the regular WebDAV API available at `/remote.php/dav/{userId}/files`.
+
+#### Mark folder as end-to-end encrypted
+After creating a folder via WebDAV the client MUST flag the folder as end-to-end encrypted,
+by sending a `PUT` request to the `/encrypted/<folder-id>` OCS endpoint where `<folder-id>` is the folder ID indicated by the WebDAV API.
+
+Once this flag has been set the folder is only accessible by clients supporting end-to-end encryption, regular WebDAV clients cannot access it anymore.
+Only empty folders can be marked as end-to-end encrypted.
+Once a folder is marked as encrypted, it MUST NOT be marked as unencrypted again.
+
+#### Create metadata file
+The client MUST create the [initial metadata](#initial-metadata) by sending a `POST` request to the `/meta-data/<folder-id>` OCS API endpoint, where `<folder-id>` is the folder ID indicated by the WebDAV API.
+- The encrypted metadata MUST be sent as the URL-encoded `metaData` parameter.
+- The metadata signature MUST be sent as the `X-NC-E2EE-SIGNATURE` HTTP header (see [Signing the metadata](#signing-the-metadata)).
+- The lock token MUST be sent as the `e2e-token` HTTP header.
+  Thus the folder MUST be locked before creating the metadata, in case of a subfolder the lock of the parent folder is used
+  (see [Uploading payload and metadata file](#uploading-payload-and-metadata-file)).
+
+If metadata already exists for the folder, the server MUST respond with HTTP status code 409 Conflict.
+
+#### Update metadata file
+Every update of the metadata file MUST be done while the folder is locked.
+The client locks the folder, uploads the changed files and the updated metadata file and finally unlocks the folder.
+The required requests are described in [Uploading payload and metadata file](#uploading-payload-and-metadata-file).
+
+### Modifying content of an end-to-end encrypted folder
+The following steps are REQUIRED to create, update or delete files of an end-to-end encrypted folder.
+If any of the following steps fail, the client MUST show a verbose warning to the user, unlock the folder and abort.
 
 1. Make a backup of the file to be modified and the metadata file, so that in case of any upload problems the client can revert to a consistent state.
-2. Detect topmost folder which needs to be changed
-  1. Increase counter of the metadata of this folder
-  2. Lock the folder with increased counter passed as header X-NC-E2EE-COUNTER
+2. Detect the topmost folder which needs to be changed
+   1. Increase the counter of the metadata of this folder
+   2. Lock the folder with the increased counter passed as `X-NC-E2EE-COUNTER` header
 3. Check for changes in the encrypted folder.
-  1. if current version is up to date, go to next step 4.
-  2. If not current,
-    - get the latest metadata file
-    - verify metadata file
-    - decrypt metadata file
-    - check if file operation is still possible (e.g. file to be renamed can already be deleted)
-4. Perform specific steps to create/update/delete file or folder:
+   1. If the current version is up to date, go to step 4.
+   2. If not current,
+      - get the latest metadata file
+      - verify the metadata file
+      - decrypt the metadata file
+      - check if the file operation is still possible (e.g. the file to be renamed can already be deleted)
+4. Perform the specific steps to create/update/delete the file or folder:
     * Create new file:
-      1. Generate a new 128-bit encryption key for the file and encrypt it using AES/GCM/NoPadding
+      1. Generate a new 128-bit file-key for the file
       2. Generate a new 96-bit IV for the file
       3. Encrypt the file using the key and IV with AES/GCM/NoPadding
-      4. Create new random identifier by generating a random UUID and removing the dash (`-`). The identifier must follow `/^[0-9a-fA-F]{32}$/`
-      5. Add new file to the files array in the metadata file with UUID as identifier and 
-        - filename
-        - encryption key
-        - nonce
-        - authenticationTag
-        - mimetype
+      4. Create a new random identifier
+      5. Add the new file to the files array in the metadata file with the random identifier as key and
+         - filename
+         - encryption key
+         - nonce
+         - authenticationTag
+         - mimetype
     * Rename existing file:
-      1. Change filename in files array, the encrypted file remains unchanged.
+      1. Change the filename in the files array, the encrypted file remains unchanged.
     * Update existing file:
-      1. Generate a new 128-bit encryption key for the file and encrypt it using AES/GCM/NoPadding
+      1. Generate a new 128-bit file-key for the file
       2. Generate a new 96-bit IV for the file
-      3. Update the metadata of the file in the files-array
-      4. Use the existing random identifier for the encrypted file when uploading it via WebDAV
-      5. Encrypt the file using the key and IV with AES/GCM/NoPadding
-      6. Use the existing random identifier for the file and upload the encrypted file via WebDAV using the existing random identifier as file ID
-      7. Update the file in the files array of the metadata with updated
-        - key
-        - IV
-        - authenticationTag
+      3. Encrypt the file using the key and IV with AES/GCM/NoPadding
+      4. Upload the encrypted file via WebDAV using the existing random identifier
+      5. Update the file in the files array of the metadata with the updated
+         - key
+         - IV
+         - authenticationTag
     * Delete file:
       1. Remove the corresponding entry from the files array
     * Move file into subfolder:
-      1. Remove file from files array in metadata file of source folder and add it to metadata files array in target folder
-      2. Steps 6-8 (encrypt, sign and upload the metadata) need to be done for source and target folder
-    * Copy file into subfolder: 
-      1. Same like create new file, to prevent having the same encryption key and nonce for two different files
+      1. Remove the file from the files array in the metadata file of the source folder and add it to the files array of the metadata of the target folder
+      2. Perform steps 6-8 (encrypt, sign and upload the metadata) for the source and the target folder
+    * Copy file into subfolder:
+      1. Same as creating a new file, to prevent having the same encryption key and nonce for two different files
     * Create new subfolder:
-      1. Create new random identifier by generating a random UUID and removing the dash (`-`). The identifier must follow `/^[0-9a-fA-F]{32}$/`
-      2. Add folder to folders array in the metadata file
+      1. Create a new random identifier
+      2. Add the folder to the folders array in the metadata file
     * Rename existing subfolder:
-      1. Change filename in folders array, the encrypted subfolder remains unchanged
+      1. Change the name in the folders array, the encrypted subfolder remains unchanged
     * Delete subfolder:
       1. Remove the corresponding entry from the folders array
       2. Delete the metadata of the subfolder by sending a `DELETE` request to the `/meta-data/<folder-id>` OCS endpoint
     * Move subfolder into another subfolder:
-      1. Remove folder from folders array in metadata file of source folder and add it to metadata folders array in target folder
-      2. Steps 6-8 (encrypt, sign and upload the metadata) need to be done for source and target folder
+      1. Remove the folder from the folders array in the metadata file of the source folder and add it to the folders array of the metadata of the target folder
+      2. Perform steps 6-8 (encrypt, sign and upload the metadata) for the source and the target folder
       3. Move the encrypted subfolder using a WebDAV `MOVE` request, the subfolder keeps its random identifier
     * Copy subfolder into another subfolder:
-      1. Recursively add new folders and new files, everything needs to be re-encrypted to prevent having the same encryption key and nonce for two different files
-      2. Steps 6-8 (encrypt, sign and upload the metadata) need to be done for every source and target folder
+      1. Recursively add new folders and new files, everything MUST be re-encrypted to prevent having the same encryption key and nonce for two different files
+      2. Perform steps 6-8 (encrypt, sign and upload the metadata) for every source and target folder
 
       _**Note:** As everything needs to be re-encrypted, this operation can be expensive for large folders, e.g. on mobile devices._
-    * Delete topmost encrypted folder
-      1. Set deleted to true in metadata array
-      2. empty files and folders array
-5. Upload modified/new encrypted file/folder, or delete the file/folder via WebDAV
-6. Encrypt the metadata using metadata-key
-7. Sign the metadata as described [above](#signing-the-metadata)
-8. Upload encrypted metadata 
+    * Delete topmost encrypted folder:
+      1. Set `deleted` to `true` in the metadata
+      2. Empty the files and folders array
+5. Upload the modified or new encrypted file or folder, or delete the file or folder via WebDAV
+6. Encrypt the metadata using the metadata-key
+7. Sign the metadata as described in [Signing the metadata](#signing-the-metadata)
+8. Upload the encrypted metadata
 9. Unlock the folder
 
-#### Uploading payload and metadata file (step 5 & 8)
-To keep the metadata and the file in sync locking is required.
-The client needs to lock the topmost encrypted (sub-)folder which needs to be changed and pass the incremented counter as header.
+#### Uploading payload and metadata file
+To keep the metadata and the file in sync locking is REQUIRED.
+The client MUST lock the topmost encrypted (sub-)folder which needs to be changed and pass the incremented counter as header.
 The lock also covers all subfolders of the locked folder.
-The server checks if the incremented counter is greater than the counter of the last lock of this folder, if not it will fail with HTTP status code 412 Precondition Failed.
-If the folder (or one of its parent folders) is already locked, the server responds with HTTP status code 423 Locked.
-If the lock operation succeeded, the server responds with HTTP status code 200 together with a token in the response body.
-In case the client lost connection after locking the folder, it can restart the operation later with another "lock" request.
-In this case the client must send the token with the new lock call.
+The server MUST check that the incremented counter is greater than the counter of the last lock of this folder, if not it MUST fail with HTTP status code 412 Precondition Failed.
+If the folder (or one of its parent folders) is already locked, the server MUST respond with HTTP status code 423 Locked.
+If the lock operation succeeded, the server responds with HTTP status code 200 together with a lock token in the response body.
+In case the client lost connection after locking the folder, it MAY restart the operation later with another lock request.
+In this case the client MUST send the lock token with the new lock request.
 This enables the server to decide if the client is allowed to retry the upload.
 
-After locking was successful, the client will
-- upload the encrypted file
-- upload the metadata file with signature as header
+After locking was successful, the client
+- uploads the encrypted file
+- uploads the metadata file with the signature as header
 
-After both files are uploaded successfully the client will finish the operation by sending an unlock request.
+After both files are uploaded successfully the client finishes the operation by sending an unlock request.
 All changes done while the folder is locked are only applied by the server when the folder is unlocked.
 
 The `<folder-id>` denotes the ID of the end-to-end encrypted folder given by the WebDAV API.
 
-To lock the folder a `POST` request to the `/lock/<folder-id>` endpoint has to be sent.
-- The incremented counter has to be sent as the `X-NC-E2EE-COUNTER` HTTP header.
-- To reuse an existing lock token it can be sent as the `e2e-token` parameter.
+To lock the folder the client MUST send a `POST` request to the `/lock/<folder-id>` endpoint.
+- The incremented counter MUST be sent as the `X-NC-E2EE-COUNTER` HTTP header.
+- To reuse an existing lock token it MUST be sent as the `e2e-token` parameter.
 - The server returns the lock token as the `e2e-token` key of the response data.
 
-All WebDAV requests modifying the content of a locked folder (e.g. `PUT`, `MKCOL`, `MOVE`, `COPY` or `DELETE`) have to include the lock token as the `e2e-token` HTTP header.
+All WebDAV requests modifying the content of a locked folder (e.g. `PUT`, `MKCOL`, `MOVE`, `COPY` or `DELETE`) MUST include the lock token as the `e2e-token` HTTP header.
 
-To update the metadata a `PUT` request to the `/meta-data/<folder-id>` endpoint has to be sent.
-- The computed signature needs to be sent as header `X-NC-E2EE-SIGNATURE`.
-- The current lock token has to be included as `e2e-token` header.
-- The encrypted metadata JSON has to be sent as the URL-encoded `metaData` parameter.
+To update the metadata the client MUST send a `PUT` request to the `/meta-data/<folder-id>` endpoint.
+- The computed signature MUST be sent as the `X-NC-E2EE-SIGNATURE` HTTP header.
+- The current lock token MUST be sent as the `e2e-token` HTTP header.
+- The encrypted metadata JSON MUST be sent as the URL-encoded `metaData` parameter.
 
-If the folder is not locked with the given token, the server responds with HTTP status code 412 Precondition Failed.
+If the folder is not locked with the given token, the server MUST respond with HTTP status code 412 Precondition Failed.
 
-To unlock the folder a `DELETE` request to `/lock/<folder-id>` has to be sent.
-- The previously received lock token has to be sent as `e2e-token` HTTP header.
-- To discard all changes done while the folder was locked, the parameter `abort` with the value `true` can be sent.
+To unlock the folder the client MUST send a `DELETE` request to `/lock/<folder-id>`.
+- The previously received lock token MUST be sent as the `e2e-token` HTTP header.
+- To discard all changes done while the folder was locked, the client MAY send the parameter `abort` with the value `true`.
   The server then reverts the changes to the state before the folder was locked.
 
-If unlocking fails, the client has to make sure that it retries or aborts the operation so that the folder is then again in an unlocked and consistent state.
+If unlocking fails, the client MUST retry or abort the operation so that the folder is again in an unlocked and consistent state.
 
+#### Locking scope examples
+_This section is informative._
 
-#### Detect encrypted folder
-##### Encrypted folder gets added
-- WebDAV endpoint lists folder with the `{http://nextcloud.org/ns}is-encrypted` property set to `1`
-  - the metadata of the folder is also available as `{http://nextcloud.org/ns}e2ee-metadata` WebDAV property
-- client shows lock symbol when listing folder
-- client refuses to update encryption status to false as this is not allowed.
-  If server sends such an information the client has to warn the user.
-- upon entering an encrypted folder the client continues with [Accessing encrypted files](#accessing-encrypted-files)
+- `/enc/folderA/test` shall be moved into `/enc/folderA/subfolderB/`
+  - the topmost folder to change is in that case `folderA`, so this needs to be locked and other subfolders of `/enc` are still accessible
+  - the metadata of `/enc/folderA` and `/enc/folderA/subfolderB` needs to be handled correctly, e.g. with the counter
+- `/enc/folderA/test` shall be moved into `/enc/folderB/`
+  - the topmost folder to change is in that case `/enc`, so this needs to be locked, thus the complete encrypted directory is locked
 
-##### Encrypted folder gets deleted
-If WebDAV endpoints does not list an encrypted folder anymore, the client has to check if this is a valid delete.
-Therefore, the client has to request the metadata using a `GET` request to the `/meta-data/<folder-id>` OCS endpoint and validate the metadata file and check if `deleted` is set to true.
-Otherwise, the client needs to display warning that the folder was maliciously deleted and refuse to delete the locally synced content.
+### Accessing content of an end-to-end encrypted folder
+
+#### Encrypted folder gets added
+- The WebDAV endpoint lists the folder with the `{http://nextcloud.org/ns}is-encrypted` property set to `1`.
+  The metadata of the folder is also available as `{http://nextcloud.org/ns}e2ee-metadata` WebDAV property.
+- The client SHOULD show a lock symbol when listing the folder.
+- The client MUST refuse to update the encryption status to false as this is not allowed.
+  If the server sends such an information the client MUST warn the user.
+- Upon entering an encrypted folder the client continues with [Accessing encrypted files](#accessing-encrypted-files).
+
+#### Encrypted folder gets deleted
+If the WebDAV endpoint does not list an encrypted folder anymore, the client MUST check if this is a valid delete.
+Therefore, the client MUST request the metadata using a `GET` request to the `/meta-data/<folder-id>` OCS endpoint, validate the metadata file and check if `deleted` is set to `true`.
+Otherwise, the client MUST display a warning that the folder was maliciously deleted and MUST refuse to delete the locally synced content.
 
 #### Accessing encrypted files
 No locking is required to read files of an encrypted folder.
 If the folder is locked due to an ongoing upload, the server responds with HTTP status code 423 Locked.
-The client can then present the currently stored files alongside with a warning and disable on mobile or postpone on desktop the possibility to do any file operation.
-To access encrypted files the client has to do the following steps:
+The client MAY then present the currently stored files alongside with a warning and SHOULD disable (on mobile) or postpone (on desktop) any file operation.
+To access encrypted files the client MUST perform the following steps:
 
 1. Check for changes in the encrypted folder.
    If not current, download the latest metadata file of the encrypted folder.
@@ -619,119 +656,130 @@ To access encrypted files the client has to do the following steps:
     4. Decrypt using AES/GCM/NoPadding (128bit) using the key and IV
     5. Validate decryption using authenticationTag
 
-In case a file is referenced in the metadata but cannot be found on the WebDAV file system the user should be warned about this.
-If the file exists locally but not on the file system the client should re-upload the file.
+In case a file is referenced in the metadata but cannot be found on the WebDAV file system the client SHOULD warn the user.
+If the file exists locally but not on the WebDAV file system the client SHOULD re-upload the file.
+In case the number of files referenced in the encrypted metadata differs from the number of files on the file system, the client SHOULD display a warning to the user.
+
+### Migrating filedrop
+Files added via secure file drop are added to the filedrop array, e.g. via the web browser.
+The filedrop-key, similar to the metadata-key, is encrypted to all users of this folder, so that all users that have access can migrate.
+
+To add entries to the filedrop array a `PUT` request to the `/meta-data/<folder-id>/filedrop` OCS endpoint MUST be sent.
+- The new entries MUST be sent as the URL-encoded `filedrop` parameter, a JSON object mapping the random identifiers to the encrypted entries.
+- The server merges the new entries into the filedrop array of the metadata.
+- No lock token is required and the counter is not changed, as the filedrop array is not part of the signed metadata.
+
+As soon as a client downloads a metadata file and finds a non-empty filedrop array, it MUST:
+
+1. lock the folder
+2. move each file from the filedrop array to the files array
+3. empty the filedrop array
+4. upload the updated metadata file
+5. unlock the folder
+
+This MUST be done even when there is no actual change on other files, so e.g. when listing files, refreshing folders, etc.
+The reason is that the filedrop array is not protected via any mechanism, see [Accepted risks](#accepted-risks).
+Thus the time filedrop entries exist SHOULD be kept as short as possible.
 
 ### Sharing encrypted folders to other users
-#### Key discovery of other users
-As a PKI approach for encryption is used, every certificate is issued by a central root authority.
-By default, the Nextcloud server acts as a root authority and issues the certificates from the CSRs.
 
-The clients do the following when trying to establish a trust relationship to another user:
+#### Key discovery of other users
+The clients MUST do the following when trying to establish a trust relationship to another user:
 
 1. Check if a certificate for the specified user ID is already downloaded (Trust On First Use (TOFU))
-   1. If a certificate is available, it will be used
-   2. If none is available, the client will continue at 2.
-2. Query the user certificate by sending GET request to the `/public-key` endpoint and sending a JSON encoded `users` parameter containing the specified UIDs
-3. If the user has not yet set up E2E and thus no public key, it will not be possible to share with the user. 
-   A warning should then be shown.
+   1. If a certificate is available, it MUST be used
+   2. If none is available, the client continues at 2.
+2. Query the user certificate by sending a `GET` request to the `/public-key` endpoint with a JSON encoded `users` parameter containing the specified user IDs
+3. If the user has not yet set up end-to-end encryption and thus has no public key, it is not possible to share with the user.
+   A warning SHOULD then be shown.
 4. Verify that the certificate is issued by the downloaded server public key.
-   1. If yes: Use this one.
-   2. If no: Show a warning that initiating an encrypted share is not possible to the user.
+   1. If yes: Use this certificate.
+   2. If no: The client MUST NOT initiate the encrypted share and SHOULD show a warning to the user.
 5. Store the user certificate locally for next operations
 
 #### Add someone to an end-to-end encrypted folder
-To create a share the following actions have to be performed:
+To create a share the following actions MUST be performed:
 
-1. The file has to be shared via the [OCS sharing](https://docs.nextcloud.com/server/latest/developer_manual/client_apis/OCS/ocs-share-api.html) API to the recipient
-2. Generate a new metadata key
-3. The recipient is added to the users array with
-  - userId
-  - certificate
-4. Add/replace the new metadata-key of every user in the users-list. 
+1. The folder is shared via the [OCS sharing](https://docs.nextcloud.com/server/latest/developer_manual/client_apis/OCS/ocs-share-api.html) API to the recipient
+2. Generate a new metadata-key
+3. Add the recipient to the users array with
+   - userId
+   - certificate
+4. Add or replace the new metadata-key of every user in the users array.
    The metadata-key is encrypted with the user's public key.
-5. The SHA-256 hash of the metadata-key is added to the keyChecksum array.
-6. The metadata of all subfolders is encrypted with the new metadata-key and uploaded.
+5. Add the SHA-256 hash of the metadata-key to the keyChecksums array.
+6. Encrypt the metadata of all subfolders with the new metadata-key and upload it.
 
 #### Remove someone from an existing share
-To remove someone from an existing share the following actions have to be performed:
+To remove someone from an existing share the following actions MUST be performed:
 
-1. The file has to be unshared via the [OCS sharing](https://docs.nextcloud.com/server/latest/developer_manual/client_apis/OCS/ocs-share-api.html) API to the recipient
-2. A new metadata-key must be generated
-3. The recipient is removed from the users array
-4. Add/replace the new metadata-key to every user in the users-list. 
+1. The folder is unshared via the [OCS sharing](https://docs.nextcloud.com/server/latest/developer_manual/client_apis/OCS/ocs-share-api.html) API
+2. Generate a new metadata-key
+3. Remove the recipient from the users array
+4. Add or replace the new metadata-key of every user in the users array.
    The metadata-key is encrypted with the user's public key.
-5. The SHA-256 hash of metadata key is added to keyChecksum array.
-6. The metadata of all subfolders is encrypted with the new metadata-key and uploaded.
+5. Add the SHA-256 hash of the metadata-key to the keyChecksums array.
+6. Encrypt the metadata of all subfolders with the new metadata-key and upload it.
 
 ### Sharing to external users
 To share end-to-end encrypted files with users without a Nextcloud account,
 it is possible to create public shares with end-to-end encryption.
-For this the encrypted root folder has to be shared with Nextcloud sharing flow as a link share.
-Then a public- / private key pair has to be generated as described for the initial setup,
-with some changes:
+For this the topmost encrypted folder MUST be shared with the Nextcloud sharing flow as a link share.
+Then a key pair MUST be generated as described for the initial device, with the following changes:
 - For the requests to the `/public-key` and `/private-key` endpoints the `shareToken` parameter,
-  with the value of the token of the created share, has to be included.
-- The `CN` of the public certificate has to be set to `s:SHARE_TOKEN`,
-  where `SHARE_TOKEN` has to be replaced with the token of the share.
+  with the value of the token of the created share, MUST be included.
+- The `CN` of the certificate MUST be set to `s:SHARE_TOKEN`,
+  where `SHARE_TOKEN` is replaced with the token of the share.
 
-This new "share user" has to be added just like a normal user to the metadata.
-To distinguish between public share users and normal users the user id can be checked for the `s:` prefix as the colon character is not allowed in normal user ids.
-When a public share user is added to the users array, the metadata version has to be set to `"2.1"`.
+This new share user MUST be added just like a normal user to the metadata.
+To distinguish between share users and normal users the user ID can be checked for the `s:` prefix as the colon character is not allowed in normal user IDs.
+When a share user is added to the users array, the metadata version MUST be set to `"2.1"`.
 
-The generated private key is encrypted as described for the initial setup with a new generated mnemonic,
-and will be stored on the server under the `s:SHARE_TOKEN` id.
-The client then should provide the new mnemonic to the sharing user which has to provide this information
+The generated private key MUST be encrypted as described for the initial device with a newly generated mnemonic,
+and is stored on the server under the `s:SHARE_TOKEN` ID.
+The client SHOULD then provide the new mnemonic to the sharing user, who has to provide this information
 to the share recipient using a secure second channel.
 
-The share recipient has to include the share token as the `X-NC-E2EE-SHARE-TOKEN` HTTP header in all OCS API requests,
+The share recipient MUST include the share token as the `X-NC-E2EE-SHARE-TOKEN` HTTP header in all OCS API requests,
 e.g. to download the private key, to lock the folder or to access the metadata.
 Only for adding filedrop entries the share token is sent as the `shareToken` parameter.
 
-### Edge cases
-#### Handling of complete key material loss
-Right now a complete key material loss means that other users that already had a share with the user will not be able to share new encrypted folders since the protocol uses TOFU for initiating shares.
+## HTTP API
+This protocol makes use of two different APIs:
+1. The [Nextcloud WebDAV](https://docs.nextcloud.com/server/latest/developer_manual/client_apis/WebDAV/index.html) API
+2. The `end_to_end_encryption` [OCS](https://www.open-collaboration-services.org/) API
 
-However, considering the fact that the user has a mnemonic passphrase to recover their key and any connected device (e.g. their smartphones) also has a way to recover the mnemonic we consider this an edge-case at the moment.
+When an OCS API endpoint is mentioned then this document uses the `v2` endpoint of OCS provided by Nextcloud.
+So that all OCS requests share the same base URL:
 
-We are investigating how a CSR approach here could help in such edge-cases at least to allow new share again.
+- `/ocs/v2.php/apps/end_to_end_encryption/api/v{VERSION}`
 
-## Possible extensions
+Where `{VERSION}` is the major version of the current metadata version.
 
-### Manual key verification
-The clients could expose QR-codes of their public keys to make manual verification of other users' public keys possible.
+## Security considerations
 
-### Hardware security module (HSM)
-A HSM would act as trusted third party and would eliminate the Nextcloud server from the key exchange process completely.
-I.e. it could replace trust on first use with a central trusted certificate authority (CA).
-The CA also would make key revocation possible with a certificate revocation list CRLs or OCSP.
-To implement CRLs the clients would always check if a key was revoked before they encrypt something with a given key.
-
-## Scenarios
-
-### Regular operations
-
-#### move folder from subfolder into another
-- /enc/folderA/test shall be moved into /enc/folderA/subfolderB/
-- topmost folder is in that case folderA, so this needs to be locked and other subfolders of /enc are still accessible
-- metadata of /enc/folderA and /enc/folderA/subfolderB needs to be handled correctly, e.g. with counter
-
-- /enc/folderA/test shall be moved into /enc/folderB/
-- topmost folder is in that case /enc, so this needs to be locked, thus complete encrypted directory is locked
+### Accepted risks
+* Leaking the number of files in an encrypted folder is an accepted risk.
+* Leaking the name of the topmost encrypted folder is an accepted risk.
+* Leaking which file operation has been performed on files in an encrypted folder is an accepted risk.
+* Filedrop: there can be no sanity check if the filedrop array was modified (e.g. deleting files on the server), as it is not part of the signed metadata.
+  Thus an attacker can remove files and filedrop entries, so that users will not receive the uploaded files.
+  As attackers cannot decrypt those files, as they do not have access to the filedrop-key, this "data loss" is accepted.
+* A new sharee cannot verify the encryption status of a shared folder, see [Attacker advertises new share as unencrypted](#attacker-advertises-new-share-as-unencrypted-to-a-new-sharee-instead-of-encrypted).
 
 ### Attack scenarios
 
-#### replay attack
-- An attacker reverts metadata file and payload to any previous state (e.g. malicious admin).
-- upon next sync at least the client with the latest sync can detect this attack by checking the counter
-- there will always be at least one client that has the latest sync state (the client which issued the latest change)
-- limitation: 
-    - it can happen that the client with the latest sync state is offline and thus the detection will be delayed. 
-      In the worst case scenario it will never be detected, if the client never syncs again
-    - meanwhile other clients cannot detect the replay attack and will do file/folder operations as usual
-- No encrypted data can be decrypted by this attacker 
+#### Replay attack
+- An attacker reverts the metadata file and payload to any previous state (e.g. malicious admin).
+- Upon next sync at least the client with the latest sync can detect this attack by checking the counter.
+- There will always be at least one client that has the latest sync state (the client which issued the latest change).
+- Limitations:
+    - it can happen that the client with the latest sync state is offline and thus the detection will be delayed.
+      In the worst case scenario it will never be detected, if the client never syncs again.
+    - meanwhile other clients cannot detect the replay attack and will do file/folder operations as usual.
+- No encrypted data can be decrypted by this attacker.
 
-#### removed sharee tries to re-add itself
+#### Removed sharee tries to re-add itself
 Given a share with User A, B and C.
 User C is removed by User A at a later time.
 User C now tries to gain access to the share again by first adding itself via Nextcloud share API.
@@ -741,11 +789,11 @@ So if user C creates a new metadata-key to get access, the checksum of the metad
 User A/B can now detect the malicious attack as a hash has been removed from keyChecksums.
 If user C instead keeps the encrypted metadata, user C cannot decrypt it, but the same considerations as in the next scenario apply.
 
-#### User with valid certificate tries to add himself
+#### User with valid certificate tries to add themselves
 In this scenario the attacker is a valid user of the Nextcloud instance and therefore has a certificate issued by the Nextcloud server or trusted CA.
 Main idea of the attack:
-- Attacker adds himself to the users list and waits until a new metadata key is used.
-- The new metadata-key will be encrypted with the public key of the attacker
+- The attacker adds themselves to the users array and waits until a new metadata-key is used.
+- The new metadata-key will be encrypted with the public key of the attacker.
 
 The signature on its own does not prevent this attack.
 Creating the signature does not require the metadata-key and the signer is looked up in the users array,
@@ -758,13 +806,55 @@ Only clients that know the latest metadata are able to detect this, e.g. a newly
 _**Note:** Detecting this scenario is not yet covered by the checks described in [Verifying the metadata](#verifying-the-metadata)._
 
 #### Attacker deletes topmost folder and/or metadata file on server
-- Attacker deletes on server either metadata file, WebDAV folder or both
-- Client detects on next sync
-- if metadata file is missing or corrupt, then client warns user and refuses to delete local content
-- if folder is missing on WebDAV endpoint, client downloads the latest metadata file and check for deleted flag
-- if deleted flag is set to true, the client accepts this as a regular folder deletion
-- if metadata file and WebDAV files are missing, client warns user and refuses to delete local content
+- The attacker deletes either the metadata file, the WebDAV folder or both on the server.
+- The client detects this on the next sync:
+  - if the metadata file is missing or corrupt, the client warns the user and refuses to delete the local content
+  - if the folder is missing on the WebDAV endpoint, the client downloads the latest metadata file and checks for the deleted flag
+  - if the deleted flag is set to true, the client accepts this as a regular folder deletion
+  - if the metadata file and the WebDAV files are missing, the client warns the user and refuses to delete the local content
 
 #### Attacker advertises new share as unencrypted to a new sharee instead of encrypted
-- we cannot guarantee encryption status on shared folder for a new sharee, because of the TOFU assumption.
-- the user is responsible to make a plausible check if folder name and context of the files/folder should be encrypted and detect such a scenario
+- The encryption status of a shared folder cannot be guaranteed for a new sharee, because of the TOFU assumption.
+- The user is responsible to make a plausibility check if the folder name and the context of the files and folders should be encrypted and to detect such a scenario.
+
+### Handling of complete key material loss
+Right now a complete key material loss means that other users that already had a share with the user will not be able to share new encrypted folders since the protocol uses TOFU for initiating shares.
+
+However, considering the fact that the user has a mnemonic passphrase to recover their key and any connected device (e.g. their smartphones) also has a way to recover the mnemonic we consider this an edge-case at the moment.
+
+We are investigating how a CSR approach here could help in such edge-cases at least to allow new shares again.
+
+## Versioning and backward compatibility
+
+### Metadata versions
+The `version` key of the metadata MUST be one of the following values:
+- `"2.0"`: metadata as specified in this document
+- `"2.1"`: metadata containing share users in the users array, see [Sharing to external users](#sharing-to-external-users)
+
+Clients MUST support both versions.
+Clients MUST NOT use metadata of an unsupported version.
+
+The major version of the metadata selects the version of the OCS API, see [HTTP API](#http-api).
+
+### Legacy private key encryption
+Private keys uploaded with an older version of this protocol use different key derivation parameters.
+If decrypting the private key with the current parameters fails, the client MUST try the following settings:
+1. PBKDF2WithHmacSHA1 as key derivation with 1024 iterations
+2. PBKDF2WithHmacSHA1 as key derivation with 600000 iterations
+3. PBKDF2WithHmacSHA256 as key derivation with 600000 iterations
+
+### Version 1
+Version 1 of this protocol is specified in [RFC_v1.md](./RFC_v1.md).
+Metadata with a version `"1.7"` was only used as an internal prototype of version 2.0 for file drop support.
+
+## Appendix: Possible extensions
+_This section is informative._
+
+### Manual key verification
+The clients could expose QR-codes of their public keys to make manual verification of other users' public keys possible.
+
+### Hardware security module (HSM)
+A HSM would act as trusted third party and would eliminate the Nextcloud server from the key exchange process completely.
+I.e. it could replace trust on first use with a central trusted certificate authority (CA).
+The CA also would make key revocation possible with a certificate revocation list CRLs or OCSP.
+To implement CRLs the clients would always check if a key was revoked before they encrypt something with a given key.
