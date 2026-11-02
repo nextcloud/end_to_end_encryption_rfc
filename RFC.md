@@ -211,9 +211,11 @@ In a second step, the private key will be stored encrypted on the server to simp
   3. Encrypt the encoded private key using the encryption key
     - AES/GCM/NoPadding
     - 256 bit key size
-3. Client uploads the encrypted private key, salt, nonce and authenticationTag to the server
+    - 96 bit nonce
+    - 128 bit authenticationTag, which is appended to the encrypted private key
+3. Client uploads the encrypted private key (including the authenticationTag), nonce and salt to the server
   1. key, salt, and nonce are Base64 encoded
-  2. Then concatenated using `|` as the separator (`{base64(key)}|{base64(nonce)}|{base64(salt)}`)
+  2. Then concatenated using `|` as the separator (`{base64(key + authenticationTag)}|{base64(nonce)}|{base64(salt)}`)
   3. This string is then sent as the URL-encoded `POST` parameter `privateKey` to the `/private-key` OCS endpoint.
 4. The mnemonic is displayed to the user as a space-separated text and the user is asked to note it down in a secure place.
   For encrypting/decrypting, the mnemonic must have no whitespace and be lowercase.
